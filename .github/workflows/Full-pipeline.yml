@@ -1,8 +1,6 @@
 name: RLK → SpongeLang → NASM Full Pipeline
 
-# -------------------------------------------
-# All OS use bash (mkdir -p, unix paths OK)
-# -------------------------------------------
+# Force all OS to use bash
 defaults:
   run:
     shell: bash
@@ -16,7 +14,6 @@ on:
 
 env:
   APP_VERSION: "v1.0.0"
-  RLK_BIN_NAME: rlkc
   BUILD_DIR: build
   PROOF_DIR: proof
 
@@ -34,74 +31,104 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      # -------------------------------------------
-      # 1) Checkout
-      # -------------------------------------------
+      # ------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------------------------------------------
-      # 2) Install Rust
-      # -------------------------------------------
+      # ------------------------------------------
+      # 2. Install Rust
+      # ------------------------------------------
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # -------------------------------------------
-      # 3) Build RLK Compiler (Cargo)
-      # -------------------------------------------
+      # ------------------------------------------
+      # 3. Build RLK Compiler
+      # ------------------------------------------
       - name: Build RLK Compiler
         run: |
           cargo build --release
 
-      # -------------------------------------------
-      # 4) Detect RLK binary path (Linux, Mac, Windows)
-      # -------------------------------------------
+      # ------------------------------------------
+      # 4. Detect RLK binary (Linux/Mac/Windows)
+      # ------------------------------------------
       - name: Detect RLK Binary
         run: |
-          if [ -f "./target/release/${RLK_BIN_NAME}" ]; then
-              echo "RLK_PATH=./target/release/${RLK_BIN_NAME}" >> $GITHUB_ENV
-          elif [ -f "./target/release/${RLK_BIN_NAME}.exe" ]; then
-              echo "RLK_PATH=./target/release/${RLK_BIN_NAME}.exe" >> $GITHUB_ENV
+          echo "Searching RLK compiler in target/release..."
+          ls -R ./target/release
+
+          if [ -f "./target/release/rlkc" ]; then
+              echo "RLK_PATH=./target/release/rlkc" >> $GITHUB_ENV
+          elif [ -f "./target/release/rlkc.exe" ]; then
+              echo "RLK_PATH=./target/release/rlkc.exe" >> $GITHUB_ENV
+          elif [ -f "./target/release/rust-like-kotlin" ]; then
+              echo "RLK_PATH=./target/release/rust-like-kotlin" >> $GITHUB_ENV
+          elif [ -f "./target/release/rust-like-kotlin.exe" ]; then
+              echo "RLK_PATH=./target/release/rust-like-kotlin.exe" >> $GITHUB_ENV
           else
-              echo "RLK compiler not found!"
-              ls -R ./target/release
+              echo "RLK compiler NOT FOUND!"
               exit 1
           fi
 
-      # -------------------------------------------
-      # 5) Download SpongeLang existing VM release
-      # -------------------------------------------
+      # ------------------------------------------
+      # 5. Download SpongeLang VM (real binary only)
+      # ------------------------------------------
       - name: Download SpongeLang VM
         run: |
-          curl -L https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/spongevm -o spongevm
+          echo "Downloading SpongeLang VM binary..."
+          curl -LJO https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/spongevm
           chmod +x spongevm
 
-      # -------------------------------------------
-      # 6) Prepare directories
-      # -------------------------------------------
+          echo "Checking binary integrity..."
+          head -n 5 spongevm
+          file spongevm
+
+          if head -n 1 spongevm | grep -i "Not Found" ; then
+              echo "ERROR: SpongeLang VM download returned HTML instead of binary"
+              exit 1
+          fi
+
+      # ------------------------------------------
+      # 6. Prepare directories
+      # ------------------------------------------
       - name: Prepare Directories
         run: |
           mkdir -p $BUILD_DIR
           mkdir -p $PROOF_DIR
 
-      # -------------------------------------------
-      # 7) RLK → SpongeLang
-      # -------------------------------------------
-      - name: Transpile RLK → SpongeLang
+      # ------------------------------------------
+      # 7. Ensure example file exists
+      # ------------------------------------------
+      - name: Ensure example RLK exists
+        run: |
+          if [ ! -f examples/hello.rlk ]; then
+              echo "examples/hello.rlk missing → creating default file"
+              mkdir -p examples
+              echo "let x = 10;" > examples/hello.rlk
+              echo "print(x);" >> examples/hello.rlk
+          fi
+
+      # ------------------------------------------
+      # 8. RLK → SpongeLang
+      # ------------------------------------------
+      - name: RLK → SpongeLang
         run: |
           $RLK_PATH examples/hello.rlk > $BUILD_DIR/output.sp
-          echo "Generated: $BUILD_DIR/output.sp"
+          echo "Generated SP: $BUILD_DIR/output.sp"
+          cat $BUILD_DIR/output.sp
 
-      # -------------------------------------------
-      # 8) SpongeLang → NASM (ASM)
-      # -------------------------------------------
+      # ------------------------------------------
+      # 9. SpongeLang → NASM
+      # ------------------------------------------
       - name: SpongeLang → NASM
         run: |
           ./spongevm --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/output.asm
+          echo "Generated ASM: $BUILD_DIR/output.asm"
 
-      # -------------------------------------------
-      # 9) Linux only → NASM → Binary
-      # -------------------------------------------
+      # ------------------------------------------
+      # 10. Linux only → NASM → Binary
+      # ------------------------------------------
       - name: Install NASM (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -113,17 +140,18 @@ jobs:
         run: |
           nasm -f elf64 $BUILD_DIR/output.asm -o $BUILD_DIR/output.o
           gcc $BUILD_DIR/output.o -o $BUILD_DIR/output.bin
+          echo "Binary built: $BUILD_DIR/output.bin"
 
-      # -------------------------------------------
-      # 10) SHA256 Proof
-      # -------------------------------------------
+      # ------------------------------------------
+      # 11. SHA256 Proof
+      # ------------------------------------------
       - name: Generate SHA256 Proof
         run: |
           sha256sum $BUILD_DIR/* > $PROOF_DIR/sha256_${{ matrix.os }}.txt || true
 
-      # -------------------------------------------
-      # 11) ProofLedger metadata
-      # -------------------------------------------
+      # ------------------------------------------
+      # 12. ProofLedger
+      # ------------------------------------------
       - name: Generate ProofLedger
         run: |
           echo "OS: ${{ matrix.os }}" > $PROOF_DIR/proofledger_${{ matrix.os }}.txt
@@ -131,9 +159,9 @@ jobs:
           echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
           echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
-      # -------------------------------------------
-      # 12) Upload artifacts
-      # -------------------------------------------
+      # ------------------------------------------
+      # 13. Upload artifacts
+      # ------------------------------------------
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -141,9 +169,7 @@ jobs:
           path: |
             build/
             proof/
-            build/output.sp
-            build/output.asm
-            build/output.bin
+            build/output.*
             proof/*.txt
 
 
@@ -159,7 +185,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
 
       - name: Publish Release
