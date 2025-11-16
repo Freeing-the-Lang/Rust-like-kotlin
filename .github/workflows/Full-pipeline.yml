@@ -1,5 +1,12 @@
 name: RLK → SpongeLang → NASM Full Pipeline
 
+# -----------------------------
+# Force all OS to use bash
+# -----------------------------
+defaults:
+  run:
+    shell: bash
+
 on:
   push:
     branches: [ main ]
@@ -10,7 +17,7 @@ on:
 env:
   APP_VERSION: "v1.0.0"
   RLK_BIN: rlkc
-  SPONGE_BIN: sponge
+  SPONGEVM: spongevm
   BUILD_DIR: build
   PROOF_DIR: proof
 
@@ -28,88 +35,98 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      # ---------------------------------------------------------
+      # --------------------------------------------
       # 1. Checkout
-      # ---------------------------------------------------------
+      # --------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
+      # --------------------------------------------
       # 2. Install Rust
-      # ---------------------------------------------------------
+      # --------------------------------------------
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # ---------------------------------------------------------
-      # 3. Build RLK Compiler (Rust-like-Kotlin → SpongeLang)
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 3. Build RLK Compiler (Cargo)
+      # --------------------------------------------
       - name: Build RLK Compiler
-        run: cargo build --release
+        run: |
+          echo "Building RLK compiler..."
+          cargo build --release
 
-      # ---------------------------------------------------------
-      # 4. Download SpongeLang Released VM
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 4. Download SpongeLang VM (existing release)
+      # --------------------------------------------
       - name: Download SpongeLang VM
         run: |
-          echo "Downloading SpongeLang existing release..."
+          echo "Downloading SpongeLang VM..."
           curl -L https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/spongevm -o spongevm
           chmod +x spongevm
 
-      # ---------------------------------------------------------
-      # 5. Prepare directories
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 5. Create build directories
+      # bash works on all OS now
+      # --------------------------------------------
       - name: Prepare build directories
         run: |
           mkdir -p $BUILD_DIR
           mkdir -p $PROOF_DIR
 
-      # ---------------------------------------------------------
-      # 6. Transpile RLK → SpongeLang (.sp)
-      # ---------------------------------------------------------
-      - name: Run RLK compiler
+      # --------------------------------------------
+      # 6. RLK → SpongeLang (.sp)
+      # --------------------------------------------
+      - name: Transpile RLK → SpongeLang
         run: |
           ./target/release/${RLK_BIN} examples/hello.rlk > $BUILD_DIR/output.sp
+          echo "Generated: $BUILD_DIR/output.sp"
 
-      # ---------------------------------------------------------
-      # 7. Run SpongeLang VM → NASM
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 7. SpongeLang → NASM (.asm)
+      # --------------------------------------------
       - name: SpongeLang → NASM
         run: |
-          ./spongevm --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/out.asm
+          ./spongevm --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/output.asm
+          echo "Generated: $BUILD_DIR/output.asm"
 
-      # ---------------------------------------------------------
-      # 8. Assemble NASM → Binary
-      # ---------------------------------------------------------
-      - name: Install NASM
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y nasm
+      # --------------------------------------------
+      # 8. Install NASM (Linux only)
+      # --------------------------------------------
+      - name: Install NASM (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm gcc
 
-      - name: Build binary
-        if: matrix.os == 'ubuntu-latest'
+      # --------------------------------------------
+      # 9. Assemble NASM → binary (Linux)
+      # --------------------------------------------
+      - name: Build binary (Linux)
+        if: runner.os == 'Linux'
         run: |
-          nasm -f elf64 $BUILD_DIR/out.asm -o $BUILD_DIR/out.o
-          gcc $BUILD_DIR/out.o -o $BUILD_DIR/out.bin
+          nasm -f elf64 $BUILD_DIR/output.asm -o $BUILD_DIR/output.o
+          gcc $BUILD_DIR/output.o -o $BUILD_DIR/output.bin
+          echo "Binary: $BUILD_DIR/output.bin"
 
-      # ---------------------------------------------------------
-      # 9. SHA256 Proof generation
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 10. SHA256 Proof
+      # --------------------------------------------
       - name: Generate SHA256 Proof
         run: |
-          sha256sum $BUILD_DIR/* > $PROOF_DIR/sha256_proof_${{ matrix.os }}.txt
+          echo "Generating SHA256 proof..."
+          sha256sum $BUILD_DIR/* > $PROOF_DIR/sha256_${{ matrix.os }}.txt || true
 
-      # ---------------------------------------------------------
-      # 10. ProofLedger
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 11. ProofLedger metadata
+      # --------------------------------------------
       - name: Generate ProofLedger
         run: |
           echo "Build OS: ${{ matrix.os }}" > $PROOF_DIR/proofledger_${{ matrix.os }}.txt
           echo "Version: $APP_VERSION" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
-          echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
           echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
+          echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
-      # ---------------------------------------------------------
-      # 11. Upload artifacts (per OS)
-      # ---------------------------------------------------------
+      # --------------------------------------------
+      # 12. Upload full artifacts by OS
+      # --------------------------------------------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -117,13 +134,13 @@ jobs:
           path: |
             build/
             proof/
-            $BUILD_DIR/output.sp
-            $BUILD_DIR/out.asm
-            $BUILD_DIR/out.bin
-            $PROOF_DIR/*.txt
+            build/output.sp
+            build/output.asm
+            build/output.bin
+            proof/*.txt
 
   # -----------------------------------------------------------
-  # 12. Release job (after all builds)
+  # Release job (runs after OS builds)
   # -----------------------------------------------------------
   release:
     name: Publish Release
@@ -134,18 +151,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.APP_VERSION }}
           name: "RLK Full Pipeline ${{ env.APP_VERSION }}"
-          draft: false
-          prerelease: false
           files: |
-            **/*.bin
             **/*.sp
             **/*.asm
+            **/*.o
+            **/*.bin
             **/*.txt
