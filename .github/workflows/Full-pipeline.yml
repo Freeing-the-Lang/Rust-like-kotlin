@@ -49,24 +49,28 @@ jobs:
         echo "Searching for RLK compiler..."
         ls -R ./target/release
 
-        CANDIDATE=$(find ./target/release -maxdepth 1 -type f \( -name "rlkc" -o -name "rlkc.exe" -o -name "rust-like-kotlin" -o -name "rust-like-kotlin.exe" \) | head -n 1)
+        CANDIDATE=$(find ./target/release -maxdepth 1 -type f \
+          \( -name "rlkc" -o -name "rlkc.exe" -o -name "rust-like-kotlin" -o -name "rust-like-kotlin.exe" \) \
+          | head -n 1)
 
         if [ -z "$CANDIDATE" ]; then
             echo "ERROR: RLK compiler not found!"
+            find ./target/release -type f
             exit 1
         fi
 
         echo "RLK_PATH=$CANDIDATE" >> $GITHUB_ENV
-        echo "Detected RLK: $CANDIDATE"
+        echo "Detected RLK compiler: $CANDIDATE"
 
     # ------------------------------------------------------------
-    # Download SpongeLang VM (Auto detect)
+    # Download SpongeLang VM — Ultimate Auto-Detect
     # ------------------------------------------------------------
-    - name: Download SpongeLang VM (Auto-detect)
+    - name: Download SpongeLang VM (Ultimate Auto-Detect)
       shell: bash
       run: |
         mkdir -p sponge
 
+        # Select correct zip by OS
         if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/linux.zip"
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
@@ -79,17 +83,58 @@ jobs:
         curl -L -o sponge/vm.zip "$ZIP_URL"
         unzip sponge/vm.zip -d sponge/
 
-        echo "Searching for executable..."
-        FOUND=$(find sponge -type f \( -perm -111 -o -name "*.exe" \) | head -n 1)
+        echo "==== All files found in zip ===="
+        find sponge -type f | sed 's/^/ --> /'
+
+        # Filter candidate files
+        CANDIDATES=$(find sponge -type f \
+          ! -name "*.hpp" \
+          ! -name "*.cpp" \
+          ! -name "*.txt" \
+          ! -name "*.md" \
+          ! -name "CMakeLists.txt" \
+          ! -path "*/meta/*" \
+        )
+
+        echo "==== Filtered candidates ===="
+        echo "$CANDIDATES" | sed 's/^/ --> /'
+
+        FOUND=""
+
+        # Try detecting by binary format
+        for FILE in $CANDIDATES; do
+            INFO=$(file "$FILE")
+
+            if echo "$INFO" | grep -q "ELF"; then
+                FOUND="$FILE"
+                break
+            fi
+            if echo "$INFO" | grep -q "Mach-O"; then
+                FOUND="$FILE"
+                break
+            fi
+            if echo "$INFO" | grep -q "PE32"; then
+                FOUND="$FILE"
+                break
+            fi
+        done
+
+        # Fallback by name pattern
+        if [ -z "$FOUND" ]; then
+            echo "Format detection failed → name-based fallback"
+            FOUND=$(echo "$CANDIDATES" | grep -Ei "spongelang|vm|runner|main" | head -n 1)
+        fi
 
         if [ -z "$FOUND" ]; then
-            echo "ERROR: VM binary not found!"
+            echo "ERROR: No VM binary found!"
             find sponge -type f
             exit 1
         fi
 
-        echo "Detected VM: $FOUND"
+        echo "==== FINAL FOUND VM ===="
+        echo "$FOUND"
 
+        # Move to workspace root
         if [[ "$FOUND" == *.exe ]]; then
             mv "$FOUND" ./spongevm.exe
             chmod +x ./spongevm.exe
@@ -98,17 +143,19 @@ jobs:
             chmod +x ./spongevm
         fi
 
+        echo "SpongeLang VM installed successfully."
+
     # ------------------------------------------------------------
     # Prepare directories
     # ------------------------------------------------------------
-    - name: Prepare Directories
+    - name: Prepare Dirs
       shell: bash
       run: |
         mkdir -p $BUILD_DIR
         mkdir -p $PROOF_DIR
 
     # ------------------------------------------------------------
-    # Ensure example RLK
+    # Ensure sample RLK source
     # ------------------------------------------------------------
     - name: Ensure example RLK exists
       shell: bash
@@ -129,9 +176,9 @@ jobs:
         cat $BUILD_DIR/output.sp
 
     # ------------------------------------------------------------
-    # SpongeLang → NASM
+    # SpongeLang → NASM ASM
     # ------------------------------------------------------------
-    - name: SpongeLang → NASM
+    - name: SpongeLang → NASM ASM
       shell: bash
       run: |
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -142,9 +189,9 @@ jobs:
         cat $BUILD_DIR/output.asm
 
     # ------------------------------------------------------------
-    # Linux only → NASM → Binary
+    # Linux only: NASM → object → binary
     # ------------------------------------------------------------
-    - name: Install NASM (Linux)
+    - name: Install NASM & GCC (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
@@ -155,7 +202,6 @@ jobs:
       run: |
         nasm -f elf64 $BUILD_DIR/output.asm -o $BUILD_DIR/output.o
         gcc $BUILD_DIR/output.o -o $BUILD_DIR/output.bin
-        echo "Built: $BUILD_DIR/output.bin"
 
     # ------------------------------------------------------------
     # SHA256 Proof
@@ -176,11 +222,11 @@ jobs:
       shell: bash
       run: |
         echo "OS: ${{ matrix.os }}" > $PROOF_DIR/proofledger_${{ matrix.os }}.txt
-        echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
         echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
+        echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
     # ------------------------------------------------------------
-    # Upload Artifacts
+    # Upload artifacts
     # ------------------------------------------------------------
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
