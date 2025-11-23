@@ -1,4 +1,4 @@
-name: RLK → SpongeLang → NASM Full Pipeline
+name: RLK → SpongeLang → NASM Full Auto Pipeline
 
 on:
   push:
@@ -46,39 +46,57 @@ jobs:
     - name: Detect RLK Binary
       shell: bash
       run: |
-        if [ -f "./target/release/rlkc" ]; then
-            echo "RLK_PATH=./target/release/rlkc" >> $GITHUB_ENV
-        elif [ -f "./target/release/rlkc.exe" ]; then
-            echo "RLK_PATH=./target/release/rlkc.exe" >> $GITHUB_ENV
-        else
-            echo "RLK compiler not found!"
+        echo "Searching for RLK compiler..."
+        ls -R ./target/release
+
+        CANDIDATE=$(find ./target/release -maxdepth 1 -type f \( -name "rlkc" -o -name "rlkc.exe" -o -name "rust-like-kotlin" -o -name "rust-like-kotlin.exe" \) | head -n 1)
+
+        if [ -z "$CANDIDATE" ]; then
+            echo "ERROR: RLK compiler not found!"
             exit 1
         fi
 
+        echo "RLK_PATH=$CANDIDATE" >> $GITHUB_ENV
+        echo "Detected RLK: $CANDIDATE"
+
     # ------------------------------------------------------------
-    # Download SpongeLang VM per OS
+    # Download SpongeLang VM (Auto detect)
     # ------------------------------------------------------------
-    - name: Download SpongeLang VM
+    - name: Download SpongeLang VM (Auto-detect)
       shell: bash
       run: |
         mkdir -p sponge
-        echo "Downloading Sponge VM for ${{ matrix.os }}"
 
         if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            curl -L -o sponge/linux.zip https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/linux.zip
-            unzip sponge/linux.zip -d sponge/
-            mv sponge/spongevm ./spongevm
+            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/linux.zip"
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            curl -L -o sponge/macos.zip https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/macos.zip
-            unzip sponge/macos.zip -d sponge/
-            mv sponge/spongevm ./spongevm
+            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/macos.zip"
         else
-            curl -L -o sponge/windows.zip https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/windows.zip
-            unzip sponge/windows.zip -d sponge/
-            mv sponge/spongevm.exe ./spongevm.exe
+            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/windows.zip"
         fi
 
-        chmod +x spongevm* || true
+        echo "Downloading VM: $ZIP_URL"
+        curl -L -o sponge/vm.zip "$ZIP_URL"
+        unzip sponge/vm.zip -d sponge/
+
+        echo "Searching for executable..."
+        FOUND=$(find sponge -type f \( -perm -111 -o -name "*.exe" \) | head -n 1)
+
+        if [ -z "$FOUND" ]; then
+            echo "ERROR: VM binary not found!"
+            find sponge -type f
+            exit 1
+        fi
+
+        echo "Detected VM: $FOUND"
+
+        if [[ "$FOUND" == *.exe ]]; then
+            mv "$FOUND" ./spongevm.exe
+            chmod +x ./spongevm.exe
+        else
+            mv "$FOUND" ./spongevm
+            chmod +x ./spongevm
+        fi
 
     # ------------------------------------------------------------
     # Prepare directories
@@ -90,7 +108,7 @@ jobs:
         mkdir -p $PROOF_DIR
 
     # ------------------------------------------------------------
-    # Ensure example RLK source
+    # Ensure example RLK
     # ------------------------------------------------------------
     - name: Ensure example RLK exists
       shell: bash
@@ -124,7 +142,7 @@ jobs:
         cat $BUILD_DIR/output.asm
 
     # ------------------------------------------------------------
-    # Linux only → NASM to Binary
+    # Linux only → NASM → Binary
     # ------------------------------------------------------------
     - name: Install NASM (Linux)
       if: runner.os == 'Linux'
@@ -140,7 +158,7 @@ jobs:
         echo "Built: $BUILD_DIR/output.bin"
 
     # ------------------------------------------------------------
-    # SHA256 Proof (OS-specific)
+    # SHA256 Proof
     # ------------------------------------------------------------
     - name: Generate SHA256 Proof
       shell: bash
@@ -162,7 +180,7 @@ jobs:
         echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
     # ------------------------------------------------------------
-    # Upload artifacts
+    # Upload Artifacts
     # ------------------------------------------------------------
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -191,7 +209,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v1.${{ github.run_number }}
-        name: "RLK Full Pipeline v1.${{ github.run_number }}"
+        name: "RLK Full Auto Pipeline v1.${{ github.run_number }}"
         files: |
           RLK-Pipeline-ubuntu-latest/**
           RLK-Pipeline-macos-latest/**
