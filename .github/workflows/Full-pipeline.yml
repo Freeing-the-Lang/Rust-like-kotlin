@@ -8,11 +8,10 @@ on:
 permissions:
   contents: write
 
-
-# ===========================================================
-# 1) AUTO TAG
-# ===========================================================
 jobs:
+  # ===========================================================
+  # 1) AUTO TAG
+  # ===========================================================
   auto-tag:
     runs-on: ubuntu-latest
     outputs:
@@ -33,10 +32,9 @@ jobs:
           git tag ${{ steps.tag-step.outputs.tag }}
           git push origin ${{ steps.tag-step.outputs.tag }}
 
-
-# ===========================================================
-# 2) BUILD (Rust → SpongeLang Exec → ASM → Native)
-# ===========================================================
+  # ===========================================================
+  # 2) BUILD JOB (3OS)
+  # ===========================================================
   build:
     needs: auto-tag
     strategy:
@@ -48,11 +46,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # -------------------------
       # Rust toolchain
+      # -------------------------
       - uses: dtolnay/rust-toolchain@stable
 
-      # NASM install
-      - name: Install NASM
+      # -------------------------
+      # NASM + MinGW install
+      # -------------------------
+      - name: Install Assemblers & Tools
+        shell: bash
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             choco install nasm -y
@@ -61,17 +64,20 @@ jobs:
           elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
             brew install nasm
           else
-            sudo apt-get update && sudo apt-get install -y nasm
+            sudo apt-get update -y
+            sudo apt-get install -y nasm
           fi
 
-      # =====================================================
-      # 1) Cargo Build → SpongeLang 실행기 생성
-      # =====================================================
+      # ======================================================
+      # 1) Cargo Build → SpongeLang Compiler
+      # ======================================================
       - name: Build SpongeLang (Rust)
-        run: cargo build --release
+        shell: bash
+        run: |
+          cargo build --release
 
-      # 실행 파일 위치
-      - name: Find Compiler Path
+      # Detect compiler path
+      - name: Detect Compiler Path
         id: exe
         shell: bash
         run: |
@@ -81,20 +87,21 @@ jobs:
             echo "compiler=target/release/spongelang" >> $GITHUB_OUTPUT
           fi
 
-      # =====================================================
+      # ======================================================
       # 2) SpongeLang → ASM
-      # =====================================================
-      - name: Run SpongeLang — Generate ASM
+      # ======================================================
+      - name: Run SpongeLang (Generate ASM)
         shell: bash
         run: |
           mkdir -p generated
+          # SpongeLang input file: input.sp (edit if needed)
           ${{ steps.exe.outputs.compiler }} input.sp > generated/out.asm
           echo "Generated ASM:"
           ls -al generated
 
-      # =====================================================
-      # 3) ASM → OBJ
-      # =====================================================
+      # ======================================================
+      # 3) NASM → OBJ
+      # ======================================================
       - name: Assemble (NASM → OBJ)
         shell: bash
         run: |
@@ -107,10 +114,10 @@ jobs:
             nasm -f elf64 generated/out.asm -o build/out.o
           fi
 
-      # =====================================================
-      # 4) OBJ → Native Executable
-      # =====================================================
-      - name: Link Native
+      # ======================================================
+      # 4) LINK → Native Executable
+      # ======================================================
+      - name: Link Executable
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
@@ -121,29 +128,33 @@ jobs:
             ld -o build/spongelang build/out.o
           fi
 
-      # =====================================================
+      # ======================================================
       # 5) META Pack
-      # =====================================================
+      # ======================================================
       - name: META Pack
         shell: bash
         run: |
           mkdir -p build/packs
-          echo "build meta" > build/packs/meta.txt
+          echo "Meta Info" > build/packs/meta.txt
 
-      # =====================================================
-      # 6) Upload Artifacts
-      # =====================================================
-      - name: Upload Artifact
+      # Debug
+      - name: Debug Build Output
+        shell: bash
+        run: |
+          echo "===== build ====="
+          ls -al build || true
+
+      # Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
           path: build/**
           if-no-files-found: error
 
-
-# ===========================================================
-# 3) RELEASE
-# ===========================================================
+  # ===========================================================
+  # 3) AUTO RELEASE JOB
+  # ===========================================================
   auto-release:
     needs: [auto-tag, build]
     runs-on: ubuntu-latest
@@ -176,9 +187,9 @@ jobs:
           name: "SpongeLang Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             ## SpongeLang (Rust Compiler → NASM → Native)
-            - Rust-based SpongeLang compiler auto-built
+            - Rust-based SpongeLang compiler built
             - ASM generated automatically
-            - 3OS native executables
+            - 3 OS native executables
             - META included
             - Auto timestamp tag
           files: release/*.zip
