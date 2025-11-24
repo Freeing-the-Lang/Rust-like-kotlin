@@ -230,20 +230,31 @@ impl Parser {
             Token::StringLiteral(s) => Expr::StringLiteral(s.clone()),
 
             Token::Ident(name) => {
-                if matches!(self.peek(), Token::LParen) {
-                    // function call
-                    self.next(); // (
-                    let mut args = Vec::new();
+    let ident_name = name.clone();
 
-                    while !matches!(self.peek(), Token::RParen) {
-                        args.push(self.parse_expr());
-                        if matches!(self.peek(), Token::Comma) {
-                            self.next();
-                        }
-                    }
+    // 먼저 peek로 판단 (mutable borrow 없음)
+    let is_call = matches!(self.peek(), Token::LParen);
 
-                    self.expect(&Token::RParen);
-                    Expr::Call(name.clone(), args)
+    // 단순 변수
+    if !is_call {
+        return Expr::Var(ident_name);
+    }
+
+    // 함수 호출 처리
+    self.next(); // consume '('
+
+    let mut args = Vec::new();
+    while !matches!(self.peek(), Token::RParen) {
+        args.push(self.parse_expr());
+
+        if matches!(self.peek(), Token::Comma) {
+            self.next(); // consume ','
+        }
+    }
+
+    self.expect(&Token::RParen);
+    Expr::Call(ident_name, args)
+            }
                 } else {
                     Expr::Var(name.clone())
                 }
