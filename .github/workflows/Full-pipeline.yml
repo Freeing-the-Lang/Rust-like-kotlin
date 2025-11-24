@@ -1,4 +1,4 @@
-name: RLK → SpongeLang → NASM Full Auto Pipeline (Ultimate Stable Edition)
+name: RLK → SpongeLang → NASM Full Auto Pipeline (Absolute Stable Edition)
 
 on:
   push:
@@ -46,16 +46,12 @@ jobs:
     - name: Detect RLK Binary
       shell: bash
       run: |
-        echo "Searching for RLK compiler..."
-        ls -R ./target/release
-
         CANDIDATE=$(find ./target/release -maxdepth 1 -type f \
           \( -name "rlkc" -o -name "rlkc.exe" -o -name "rust-like-kotlin" -o -name "rust-like-kotlin.exe" \) \
           | head -n 1)
 
         if [ -z "$CANDIDATE" ]; then
             echo "ERROR: RLK compiler not found!"
-            find ./target/release -type f
             exit 1
         fi
 
@@ -63,14 +59,14 @@ jobs:
         echo "Detected RLK compiler: $CANDIDATE"
 
     # ------------------------------------------------------------
-    # Download SpongeLang VM — Ultimate Auto-Detect + Meta Fix
+    # Download SpongeLang VM (auto detect + auto meta fix)
     # ------------------------------------------------------------
-    - name: Download SpongeLang VM (Auto Binary + Auto META Scanning)
+    - name: Download SpongeLang VM (Ultimate Auto-Detect + META Fix)
       shell: bash
       run: |
         mkdir -p sponge
 
-        # Select correct zip by OS
+        # Select correct ZIP by OS
         if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/linux.zip"
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
@@ -79,23 +75,13 @@ jobs:
             ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/windows.zip"
         fi
 
-        echo "Downloading VM: $ZIP_URL"
         curl -L -o sponge/vm.zip "$ZIP_URL"
         unzip sponge/vm.zip -d sponge/
 
-        echo "==== All files in ZIP ===="
-        find sponge -maxdepth 4 -type f | sed 's/^/ --> /'
-
-        # --------------------------------------------------------
-        # 1) Auto-detect VM binary
-        # --------------------------------------------------------
+        # --- Auto detect executable ---
         CANDIDATES=$(find sponge -type f \
-          ! -name "*.hpp" \
-          ! -name "*.cpp" \
-          ! -name "*.txt" \
-          ! -name "*.md" \
-          ! -name "CMakeLists.txt" \
-        )
+          ! -name "*.hpp" ! -name "*.cpp" ! -name "*.txt" \
+          ! -name "*.md" ! -name "CMakeLists.txt")
 
         FOUND=""
         for FILE in $CANDIDATES; do
@@ -106,19 +92,16 @@ jobs:
             fi
         done
 
-        # Fallback by name pattern
         if [ -z "$FOUND" ]; then
             FOUND=$(echo "$CANDIDATES" | grep -Ei "sponge|vm|runner|main" | head -n 1)
         fi
 
         if [ -z "$FOUND" ]; then
-            echo "ERROR: No VM executable found!"
+            echo "ERROR: No VM binary detected!"
             exit 1
         fi
 
-        echo "FINAL VM binary: $FOUND"
-
-        # Move binary to workspace root
+        # --- Move binary to root ---
         if [[ "$FOUND" == *.exe ]]; then
             mv "$FOUND" ./spongevm.exe
             chmod +x ./spongevm.exe
@@ -127,30 +110,21 @@ jobs:
             chmod +x ./spongevm
         fi
 
-        # --------------------------------------------------------
-        # 2) Auto-detect all META files and move to ./packs
-        # --------------------------------------------------------
-        echo "=== Scanning for META files (.meta) ==="
+        # --- Auto detect META folder wherever it is ---
         META_FILE=$(find sponge -type f -name "*.meta" -print -quit)
-
         if [ -z "$META_FILE" ]; then
-            echo "ERROR: ZIP contains NO .meta files!"
+            echo "ERROR: No .meta files found in ZIP!"
             exit 1
         fi
-
         META_DIR=$(dirname "$META_FILE")
-        echo "Meta directory detected: $META_DIR"
 
         mkdir -p packs
         cp -r "$META_DIR/"* packs/
 
-        echo "META files successfully copied to ./packs"
-
-        echo "=== Final workspace structure ==="
-        find . -maxdepth 2 -type d | sed 's/^/ --> /'
+        echo "VM + META installation complete."
 
     # ------------------------------------------------------------
-    # Prepare build and proof directories
+    # Prepare Dirs
     # ------------------------------------------------------------
     - name: Prepare Dirs
       shell: bash
@@ -159,7 +133,7 @@ jobs:
         mkdir -p $PROOF_DIR
 
     # ------------------------------------------------------------
-    # Ensure sample RLK source
+    # Ensure example RLK file
     # ------------------------------------------------------------
     - name: Ensure example RLK exists
       shell: bash
@@ -176,15 +150,17 @@ jobs:
     - name: RLK → SpongeLang
       shell: bash
       run: |
+        cd "$GITHUB_WORKSPACE"
         $RLK_PATH examples/hello.rlk > $BUILD_DIR/output.sp
         cat $BUILD_DIR/output.sp
 
     # ------------------------------------------------------------
-    # SpongeLang → NASM
+    # SpongeLang → NASM (cwd fix!)
     # ------------------------------------------------------------
-    - name: SpongeLang → NASM
+    - name: SpongeLang → NASM ASM
       shell: bash
       run: |
+        cd "$GITHUB_WORKSPACE"    # ★★★★★ 핵심 fix (cwd 강제)
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
             ./spongevm.exe --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/output.asm
         else
@@ -193,7 +169,7 @@ jobs:
         cat $BUILD_DIR/output.asm
 
     # ------------------------------------------------------------
-    # Linux only: Build final binary
+    # Linux: assemble → link
     # ------------------------------------------------------------
     - name: Install NASM & GCC (Linux)
       if: runner.os == 'Linux'
@@ -213,6 +189,7 @@ jobs:
     - name: Generate SHA256 Proof
       shell: bash
       run: |
+        cd "$GITHUB_WORKSPACE"
         if command -v sha256sum ; then
             sha256sum $BUILD_DIR/* > $PROOF_DIR/sha256_${{ matrix.os }}.txt
         else
@@ -220,17 +197,18 @@ jobs:
         fi
 
     # ------------------------------------------------------------
-    # Proof Ledger
+    # ProofLedger
     # ------------------------------------------------------------
     - name: Generate ProofLedger
       shell: bash
       run: |
+        cd "$GITHUB_WORKSPACE"
         echo "OS: ${{ matrix.os }}" > $PROOF_DIR/proofledger_${{ matrix.os }}.txt
         echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
         echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
     # ------------------------------------------------------------
-    # Upload all artifacts
+    # Upload artifacts
     # ------------------------------------------------------------
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -241,9 +219,6 @@ jobs:
           proof/
           spongevm*
           packs/
-          $BUILD_DIR/*
-          $PROOF_DIR/*
-
 
 # =============================================================
 # RELEASE JOB
@@ -251,7 +226,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4
