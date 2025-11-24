@@ -34,7 +34,7 @@ jobs:
           git push origin ${{ steps.tag.outputs.tag }}
 
   # ==============================================================
-  # BUILD ON 3 OS
+  # CROSS-OS BUILD
   # ==============================================================
   build:
     needs: auto-tag
@@ -57,13 +57,14 @@ jobs:
       # LINUX — ELF64
       # ============================================================
       - name: Install NASM (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y nasm
 
       - name: Linux Build
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
         run: |
           ./target/release/rlkc > build/out.asm
           nasm -felf64 build/out.asm -o build/out.o
@@ -72,10 +73,10 @@ jobs:
             -lc
 
       # ============================================================
-      # WINDOWS — x64 EXE
+      # WINDOWS — EXE
       # ============================================================
       - name: Windows Build
-        if: matrix.os == 'windows-latest'
+        if: startsWith(matrix.os, 'windows')
         shell: powershell
         run: |
           ./target/release/rlkc | Out-File build/out.asm -Encoding ascii
@@ -83,14 +84,14 @@ jobs:
           link.exe build/out.obj /ENTRY:main /SUBSYSTEM:CONSOLE /OUT:build\spongelang.exe
 
       # ============================================================
-      # macOS — Universal Binary
+      # macOS — Universal Binary (x86_64 + arm64)
       # ============================================================
       - name: Install NASM (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: brew install nasm
 
       - name: macOS Build
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
           SDK=$(xcrun --show-sdk-path)
@@ -98,27 +99,29 @@ jobs:
           ./target/release/rlkc > build/out_x86.asm
           cp build/out_x86.asm build/out_arm.asm
 
-          # x86_64
+          # x86_64 build
           nasm -fmacho64 build/out_x86.asm -o build/out_x86.o
           ld -arch x86_64 \
             -platform_version macos 12.0 12.0 \
-            -syslibroot "$SDK" -lSystem \
+            -syslibroot "$SDK" \
+            -lSystem \
             build/out_x86.o -o build/spongelang_x86
 
-          # arm64
+          # arm64 build
           nasm -fmacho64 build/out_arm.asm -o build/out_arm.o
           ld -arch arm64 \
             -platform_version macos 12.0 12.0 \
-            -syslibroot "$SDK" -lSystem \
+            -syslibroot "$SDK" \
+            -lSystem \
             build/out_arm.o -o build/spongelang_arm
 
-          # Universal binary merge
+          # universal merge
           lipo -create -output build/spongelang build/spongelang_x86 build/spongelang_arm
 
-          # Hardened runtime codesign (ad-hoc)
+          # hardened runtime codesign
           codesign --force --deep --options runtime --sign "-" build/spongelang
 
-          # OPTIONAL: notarization
+          # optional notarization
           if [[ -n "$APPLE_ID" && -n "$TEAM_ID" && -n "$APP_PASSWORD" ]]; then
             xcrun notarytool submit build/spongelang \
               --apple-id "$APPLE_ID" \
@@ -132,7 +135,7 @@ jobs:
       # ============================================================
       # ZIP ARTIFACT
       # ============================================================
-      - name: Zip output
+      - name: Zip Output
         shell: bash
         run: |
           cd build
@@ -152,6 +155,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: release-files
@@ -163,9 +167,9 @@ jobs:
           name: "SpongeLang FULL AUTO — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             ## SpongeLang FULL AUTO Release
-            - Linux ELF64 build  
+            - Linux ELF64 binary  
             - Windows x64 EXE  
             - macOS Universal Binary (x86_64 + arm64)  
-            - Hardened Runtime (macOS)  
-            - Auto Tag + Release  
+            - Hardened runtime (macOS)  
+            - Auto Tag + Auto Release  
           files: release-files/**/*.zip
