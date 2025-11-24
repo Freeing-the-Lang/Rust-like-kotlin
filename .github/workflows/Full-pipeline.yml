@@ -1,4 +1,4 @@
-name: "SpongeLang — Full Auto ASM Build + META + Auto Release"
+name: "SpongeLang — Rust Compiler → ASM → EXE + META + Auto Release"
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 
 # ===========================================================
-# 1) AUTO TAG JOB
+# 1) AUTO TAG
 # ===========================================================
 jobs:
   auto-tag:
@@ -35,7 +35,7 @@ jobs:
 
 
 # ===========================================================
-# 2) BUILD JOB — 3 OS
+# 2) BUILD (Rust → SpongeLang Exec → ASM → Native)
 # ===========================================================
   build:
     needs: auto-tag
@@ -43,54 +43,58 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-13, windows-latest]
-
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Python environment
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Python Modules
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml
+      # Rust toolchain
+      - uses: dtolnay/rust-toolchain@stable
 
       # NASM install
       - name: Install NASM
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             choco install nasm -y
+            choco install mingw -y
+            echo "C:/tools/mingw64/bin" >> $GITHUB_PATH
           elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
             brew install nasm
           else
             sudo apt-get update && sudo apt-get install -y nasm
           fi
 
-      # MinGW linker (Windows)
-      - name: Install MinGW (Windows linker)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install mingw -y
-          echo "C:/tools/mingw64/bin" >> $GITHUB_PATH
+      # =====================================================
+      # 1) Cargo Build → SpongeLang 실행기 생성
+      # =====================================================
+      - name: Build SpongeLang (Rust)
+        run: cargo build --release
 
-      # ===============================
-      # SpongeLang → ASM
-      # ===============================
-      - name: Generate ASM using SpongeLang
+      # 실행 파일 위치
+      - name: Find Compiler Path
+        id: exe
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            echo "compiler=target/release/spongelang.exe" >> $GITHUB_OUTPUT
+          else
+            echo "compiler=target/release/spongelang" >> $GITHUB_OUTPUT
+          fi
+
+      # =====================================================
+      # 2) SpongeLang → ASM
+      # =====================================================
+      - name: Run SpongeLang — Generate ASM
         shell: bash
         run: |
           mkdir -p generated
-          python tools/spongelang.py input.sp --out generated/out.asm
+          ${{ steps.exe.outputs.compiler }} input.sp > generated/out.asm
           echo "Generated ASM:"
           ls -al generated
 
-      # ===============================
-      # ASM → OBJ
-      # ===============================
+      # =====================================================
+      # 3) ASM → OBJ
+      # =====================================================
       - name: Assemble (NASM → OBJ)
         shell: bash
         run: |
@@ -103,10 +107,10 @@ jobs:
             nasm -f elf64 generated/out.asm -o build/out.o
           fi
 
-      # ===============================
-      # OBJ → Native Executable
-      # ===============================
-      - name: Link Executable
+      # =====================================================
+      # 4) OBJ → Native Executable
+      # =====================================================
+      - name: Link Native
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
@@ -117,20 +121,19 @@ jobs:
             ld -o build/spongelang build/out.o
           fi
 
-      # ===============================
-      # META PACK
-      # ===============================
-      - name: Generate META Pack
+      # =====================================================
+      # 5) META Pack
+      # =====================================================
+      - name: META Pack
         shell: bash
         run: |
-          python tools/generate_meta.py
           mkdir -p build/packs
-          cp -r packs/* build/packs/ 2>/dev/null || true
+          echo "build meta" > build/packs/meta.txt
 
-      # ===============================
-      # Artifact (per OS)
-      # ===============================
-      - name: Upload Artifacts
+      # =====================================================
+      # 6) Upload Artifacts
+      # =====================================================
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
@@ -139,7 +142,7 @@ jobs:
 
 
 # ===========================================================
-# 3) RELEASE JOB
+# 3) RELEASE
 # ===========================================================
   auto-release:
     needs: [auto-tag, build]
@@ -148,8 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: release-temp
 
@@ -160,11 +162,11 @@ jobs:
           cp -r release-temp/spongelang-macos-13/*        release/macos/   || true
           cp -r release-temp/spongelang-windows-latest/*  release/windows/ || true
 
-      - name: ZIP Packages
+      - name: Create ZIPs
         run: |
           cd release
-          zip -r linux.zip   linux
-          zip -r macos.zip   macos
+          zip -r linux.zip linux
+          zip -r macos.zip macos
           zip -r windows.zip windows
 
       - name: Publish Release
@@ -173,11 +175,12 @@ jobs:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
           name: "SpongeLang Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang — Automatic Release
-            - 3 OS native executables
-            - SpongeLang → NASM → Binary
-            - META Pack Included
-            - Auto Timestamp Tag:  ${{ needs.auto-tag.outputs.tag }}
+            ## SpongeLang (Rust Compiler → NASM → Native)
+            - Rust-based SpongeLang compiler auto-built
+            - ASM generated automatically
+            - 3OS native executables
+            - META included
+            - Auto timestamp tag
           files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
