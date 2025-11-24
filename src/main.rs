@@ -5,13 +5,15 @@ mod codegen;
 
 use lexer::lex;
 use parser::Parser;
-use semantic::Semantic;
+use semantic::SemanticAnalyzer;
 use codegen::Codegen;
 
 use std::fs;
 
 fn main() {
-    // 1. read input.sp
+    // ---------------------
+    // 1. Read input.sp file
+    // ---------------------
     let input = match fs::read_to_string("input.sp") {
         Ok(s) => s,
         Err(_) => {
@@ -20,21 +22,31 @@ fn main() {
         }
     };
 
-    // 2. lexing
+    // ---------------------
+    // 2. Lexing
+    // ---------------------
     let tokens = lex(&input);
 
-    // 3. parsing
-    let mut parser = Parser::new(&tokens);
-    let program = parser.parse_program();   // ✔ Program directly returned
+    // ---------------------
+    // 3. Parsing
+    // ---------------------
+    let mut parser = Parser::new(tokens);   // MUST PASS Vec<Token>
+    let program = parser.parse_program();   // returns Program (not Result)
 
-    // 4. semantic analysis
-    let mut semantic = Semantic::new();
-    let ir = semantic.process(program);     // ✔ your semantic already returns Program/IR
+    // ---------------------
+    // 4. Semantic Analysis
+    // ---------------------
+    let semantic = SemanticAnalyzer::new(program);
+    let ir = semantic.analyze();   // returns IRProgram
 
-    // 5. codegen
+    // ---------------------
+    // 5. Codegen: IR → NASM ASM
+    // ---------------------
     let cg = Codegen::new();
     let asm = cg.generate(&ir);
 
-    // 6. output ASM
+    // ---------------------
+    // 6. Write ASM to stdout
+    // ---------------------
     println!("{}", asm);
 }
