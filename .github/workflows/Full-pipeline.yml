@@ -48,15 +48,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Build SpongeLang compiler (rlkc)
-      - name: Build compiler
+      # Build SpongeLang compiler
+      - name: Build rlkc (compiler)
         run: cargo build --release
 
       - name: Prepare build directory
         run: mkdir -p build
 
       # ============================================================
-      # LINUX  (ELF64)
+      # LINUX
       # ============================================================
       - name: Build on Linux
         if: matrix.os == 'ubuntu-latest'
@@ -64,11 +64,11 @@ jobs:
           ./target/release/rlkc > build/out.asm
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/spongelang \
-              --dynamic-linker /lib64/ld-linux-x86-64.so.2 \
-              -lc
+            --dynamic-linker /lib64/ld-linux-x86-64.so.2 \
+            -lc
 
       # ============================================================
-      # WINDOWS  (MSVC + EXE)
+      # WINDOWS
       # ============================================================
       - name: Build on Windows
         if: matrix.os == 'windows-latest'
@@ -79,8 +79,12 @@ jobs:
           link.exe build/out.obj /ENTRY:main /SUBSYSTEM:CONSOLE /OUT:build\spongelang.exe
 
       # ============================================================
-      # macOS Universal Binary (x86 + arm64 → lipo)
+      # macOS — Universal Binary
       # ============================================================
+      - name: Install NASM (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install nasm
+
       - name: Build on macOS
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -90,14 +94,14 @@ jobs:
           ./target/release/rlkc > build/out_x86.asm
           cp build/out_x86.asm build/out_arm.asm
 
-          # x86_64 build
+          # x86_64
           nasm -fmacho64 build/out_x86.asm -o build/out_x86.o
           ld -arch x86_64 \
             -platform_version macos 12.0 12.0 \
             -syslibroot "$SDK" -lSystem \
             build/out_x86.o -o build/spongelang_x86
 
-          # arm64 build
+          # arm64
           nasm -fmacho64 build/out_arm.asm -o build/out_arm.o
           ld -arch arm64 \
             -platform_version macos 12.0 12.0 \
@@ -110,7 +114,7 @@ jobs:
           # Hardened runtime codesign
           codesign --force --deep --options runtime --sign "-" build/spongelang
 
-          # OPTIONAL: Notarization (skipped if secrets not set)
+          # OPTIONAL: notarization
           if [[ -n "$APPLE_ID" && -n "$TEAM_ID" && -n "$APP_PASSWORD" ]]; then
             xcrun notarytool submit build/spongelang \
               --apple-id "$APPLE_ID" \
@@ -118,17 +122,18 @@ jobs:
               --password "$APP_PASSWORD" \
               --wait
           else
-            echo "Notarization skipped (no secrets provided)."
+            echo "Notarization skipped."
           fi
 
-      # Make ZIP based on OS
+      # ============================================================
+      # ZIP PACKAGE
+      # ============================================================
       - name: Zip build output
         shell: bash
         run: |
           cd build
           zip -r ../${{ matrix.os }}.zip .
 
-      # Upload artifact
       - uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
