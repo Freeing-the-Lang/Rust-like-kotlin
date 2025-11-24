@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO KotlinNative Build + META + Release"
+name: "SpongeLang — Full Auto ASM Build + META + Auto Release"
 
 on:
   push:
@@ -10,14 +10,13 @@ permissions:
 
 
 # ===========================================================
-# AUTO TAG
+# 1) AUTO TAG JOB
 # ===========================================================
 jobs:
   auto-tag:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag-step.outputs.tag }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +35,7 @@ jobs:
 
 
 # ===========================================================
-# BUILD (Linux / Mac / Windows)
+# 2) BUILD JOB — 3 OS
 # ===========================================================
   build:
     needs: auto-tag
@@ -50,71 +49,97 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Python for SpongeLang
-      - name: Install Python dependencies
+      # Python environment
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python Modules
         run: |
-          python3 -m pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install pyyaml
 
-      # Kotlin Native 설치
-      - name: Install Kotlin Native
-        shell: bash
+      # NASM install
+      - name: Install NASM
         run: |
-          curl -L https://github.com/JetBrains/kotlin/releases/download/v2.0.20/kotlin-native-prebuilt-${{ matrix.os }}.zip -o kotlin_native.zip
-          unzip kotlin_native.zip -d kotlin_native
-          echo "$PWD/kotlin_native/bin" >> $GITHUB_PATH
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            choco install nasm -y
+          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
+            brew install nasm
+          else
+            sudo apt-get update && sudo apt-get install -y nasm
+          fi
 
-      # =====================================================
-      # SpongeLang → Kotlin 코드 생성
-      # =====================================================
-      - name: Run SpongeLang (Generate .kt)
+      # MinGW linker (Windows)
+      - name: Install MinGW (Windows linker)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install mingw -y
+          echo "C:/tools/mingw64/bin" >> $GITHUB_PATH
+
+      # ===============================
+      # SpongeLang → ASM
+      # ===============================
+      - name: Generate ASM using SpongeLang
+        shell: bash
         run: |
           mkdir -p generated
-          python3 tools/spongelang.py input.sp --out generated/Main.kt
+          python tools/spongelang.py input.sp --out generated/out.asm
+          echo "Generated ASM:"
+          ls -al generated
 
-      # =====================================================
-      # Kotlin Native 컴파일
-      # =====================================================
-      - name: Build Kotlin Native
+      # ===============================
+      # ASM → OBJ
+      # ===============================
+      - name: Assemble (NASM → OBJ)
         shell: bash
         run: |
-          mkdir -p build/bin
-          kotlinc-native generated/Main.kt -o build/bin/spongelang_native
+          mkdir -p build
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            nasm -f win64 generated/out.asm -o build/out.obj
+          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
+            nasm -f macho64 generated/out.asm -o build/out.o
+          else
+            nasm -f elf64 generated/out.asm -o build/out.o
+          fi
 
-      # =====================================================
-      # META Pack 생성
-      # =====================================================
+      # ===============================
+      # OBJ → Native Executable
+      # ===============================
+      - name: Link Executable
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            x86_64-w64-mingw32-gcc build/out.obj -o build/spongelang.exe
+          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
+            ld -o build/spongelang build/out.o -macosx_version_min 10.15 -lSystem
+          else
+            ld -o build/spongelang build/out.o
+          fi
+
+      # ===============================
+      # META PACK
+      # ===============================
       - name: Generate META Pack
         shell: bash
         run: |
-          python3 tools/generate_meta.py
-          mkdir -p build/bin/packs
-          cp -r packs/* build/bin/packs/
+          python tools/generate_meta.py
+          mkdir -p build/packs
+          cp -r packs/* build/packs/ 2>/dev/null || true
 
-      # =====================================================
-      # Debug output
-      # =====================================================
-      - name: Debug Output
-        shell: bash
-        run: |
-          echo "==== build/bin ===="
-          ls -al build/bin || true
-          echo "==== packs ===="
-          ls -al build/bin/packs || true
-
-      # =====================================================
-      # Upload artifact
-      # =====================================================
-      - name: Upload Binary
+      # ===============================
+      # Artifact (per OS)
+      # ===============================
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
-          path: build/bin/*
+          path: build/**
           if-no-files-found: error
 
 
 # ===========================================================
-# RELEASE
+# 3) RELEASE JOB
 # ===========================================================
   auto-release:
     needs: [auto-tag, build]
@@ -122,36 +147,37 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
           path: release-temp
 
       - name: Organize Release Files
         run: |
           mkdir -p release/linux release/macos release/windows
+          cp -r release-temp/spongelang-ubuntu-latest/*   release/linux/   || true
+          cp -r release-temp/spongelang-macos-13/*        release/macos/   || true
+          cp -r release-temp/spongelang-windows-latest/*  release/windows/ || true
 
-          cp -r release-temp/spongelang-ubuntu-latest/* release/linux/ || true
-          cp -r release-temp/spongelang-macos-13/* release/macos/ || true
-          cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
-
-      - name: Create Release ZIPs
+      - name: ZIP Packages
         run: |
           cd release
-          zip -r linux.zip linux
-          zip -r macos.zip macos
+          zip -r linux.zip   linux
+          zip -r macos.zip   macos
           zip -r windows.zip windows
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang — FULL AUTO KotlinNative + META — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang Full Auto Kotlin Native Release
-            - 3OS Native executables
-            - Auto-generated .kt from SpongeLang
-            - Full META pack included
-            - Timestamp Auto Tag
+            ## SpongeLang — Automatic Release
+            - 3 OS native executables
+            - SpongeLang → NASM → Binary
+            - META Pack Included
+            - Auto Timestamp Tag:  ${{ needs.auto-tag.outputs.tag }}
           files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
