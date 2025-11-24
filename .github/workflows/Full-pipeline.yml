@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO Build + Auto META + Release (No External ZIP)"
+name: "SpongeLang — FULL AUTO KotlinNative Build + META + Release"
 
 on:
   push:
@@ -9,9 +9,9 @@ permissions:
   contents: write
 
 
-# =====================================================================
+# ===========================================================
 # AUTO TAG
-# =====================================================================
+# ===========================================================
 jobs:
   auto-tag:
     runs-on: ubuntu-latest
@@ -35,9 +35,9 @@ jobs:
           git push origin ${{ steps.tag-step.outputs.tag }}
 
 
-# =====================================================================
-# BUILD JOB (Linux / Mac / Windows)
-# =====================================================================
+# ===========================================================
+# BUILD (Linux / Mac / Windows)
+# ===========================================================
   build:
     needs: auto-tag
     strategy:
@@ -49,32 +49,41 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: lukka/get-cmake@latest
 
-      # -----------------------------
-      # CMAKE BUILD
-      # -----------------------------
-      - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - name: Install
-        run: cmake --install build --config Release
-
-      # -----------------------------
-      # Install Python + PyYAML
-      # -----------------------------
-      - name: Install Python Dependencies
-        shell: bash
+      # Python for SpongeLang
+      - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
           pip install pyyaml
 
-      # -----------------------------
-      # AUTO META GENERATION
-      # -----------------------------
+      # Kotlin Native 설치
+      - name: Install Kotlin Native
+        shell: bash
+        run: |
+          curl -L https://github.com/JetBrains/kotlin/releases/download/v2.0.20/kotlin-native-prebuilt-${{ matrix.os }}.zip -o kotlin_native.zip
+          unzip kotlin_native.zip -d kotlin_native
+          echo "$PWD/kotlin_native/bin" >> $GITHUB_PATH
+
+      # =====================================================
+      # SpongeLang → Kotlin 코드 생성
+      # =====================================================
+      - name: Run SpongeLang (Generate .kt)
+        run: |
+          mkdir -p generated
+          python3 tools/spongelang.py input.sp --out generated/Main.kt
+
+      # =====================================================
+      # Kotlin Native 컴파일
+      # =====================================================
+      - name: Build Kotlin Native
+        shell: bash
+        run: |
+          mkdir -p build/bin
+          kotlinc-native generated/Main.kt -o build/bin/spongelang_native
+
+      # =====================================================
+      # META Pack 생성
+      # =====================================================
       - name: Generate META Pack
         shell: bash
         run: |
@@ -82,21 +91,21 @@ jobs:
           mkdir -p build/bin/packs
           cp -r packs/* build/bin/packs/
 
-      # -----------------------------
-      # DEBUG
-      # -----------------------------
-      - name: Debug Build Output
+      # =====================================================
+      # Debug output
+      # =====================================================
+      - name: Debug Output
         shell: bash
         run: |
           echo "==== build/bin ===="
           ls -al build/bin || true
-          echo "==== build/bin/packs ===="
+          echo "==== packs ===="
           ls -al build/bin/packs || true
 
-      # -----------------------------
-      # UPLOAD BINARY ARTIFACTS
-      # -----------------------------
-      - name: Upload Binary Artifact
+      # =====================================================
+      # Upload artifact
+      # =====================================================
+      - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
@@ -104,9 +113,9 @@ jobs:
           if-no-files-found: error
 
 
-# =====================================================================
-# RELEASE JOB
-# =====================================================================
+# ===========================================================
+# RELEASE
+# ===========================================================
   auto-release:
     needs: [auto-tag, build]
     runs-on: ubuntu-latest
@@ -136,16 +145,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang — FULL AUTO + META — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang — FULL AUTO KotlinNative + META — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang Full Auto Release
-
-            Included:
-            - Linux/macOS/Windows binaries
-            - Auto-generated META runtime pack
+            ## SpongeLang Full Auto Kotlin Native Release
+            - 3OS Native executables
+            - Auto-generated .kt from SpongeLang
+            - Full META pack included
             - Timestamp Auto Tag
-            - No external ZIP — full self-contained build
-
           files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
