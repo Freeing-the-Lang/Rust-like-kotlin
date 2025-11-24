@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO 3OS + MSVC + META + RELEASE"
+name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE"
 
 on:
   push:
@@ -8,10 +8,10 @@ on:
 permissions:
   contents: write
 
+# ---------------------------------------------------------
+# AUTO TAG
+# ---------------------------------------------------------
 jobs:
-  # ---------------------------------------------------------
-  # AUTO TAG
-  # ---------------------------------------------------------
   auto-tag:
     runs-on: ubuntu-latest
     outputs:
@@ -34,9 +34,9 @@ jobs:
           git push origin ${{ steps.tag-step.outputs.tag }}
 
 
-  # ---------------------------------------------------------
-  # BUILD JOB (3 OS)
-  # ---------------------------------------------------------
+# ---------------------------------------------------------
+# BUILD JOB (3 OS)
+# ---------------------------------------------------------
   build:
     needs: auto-tag
     strategy:
@@ -49,72 +49,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust Build
-      - name: Build rlkc
+      # Build rlkc (SpongeLang compiler)
+      - name: Cargo Build
         run: cargo build --release
 
-      # Make build dir
-      - run: mkdir -p build
+      - name: Prepare build
+        run: mkdir -p build
 
-      # Generate ASM
+      # SpongeLang → ASM
       - name: Generate ASM
         shell: bash
-        run: ./target/release/rlkc > build/out.asm
+        run: |
+          ./target/release/rlkc > build/out.asm
 
-      # -----------------------------------------------------
-      # OS SPECIFIC
-      # -----------------------------------------------------
 
-      # ---------------------- LINUX ------------------------
-      - name: Linux Build
+      # ================
+      #   L I N U X
+      # ================
+      - name: Build for Linux
         if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y nasm
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/out
 
-      # ---------------------- MACOS ------------------------
-      - name: macOS Build
+
+      # ================
+      #   M A C O S
+      # ================
+      - name: Build for macOS
         if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
           brew install nasm
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
-          ld -macosx_version_min 11.0 -lSystem -syslibroot $SDK \
-             -o build/out build/out_x86.o
 
-      # --------------------- WINDOWS -----------------------
+          # ld needs explicit platform flags
+          ld -macosx_version_min 11.0 \
+             -lSystem \
+             -syslibroot $SDK \
+             build/out_x86.o \
+             -o build/out
+
+
+      # ================
+      #  W I N D O W S
+      # ================
       - name: Install NASM on Windows
         if: matrix.os == 'windows-latest'
         run: choco install nasm -y
 
-      - name: Windows Build (MSVC)
+      - name: Build for Windows (MSVC link)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           nasm -f win64 build/out.asm -o build/out.obj
 
-          # VC BuildTools path
+          # Find MSVC vcvars64.bat
           $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
           if (!(Test-Path $vcvars)) {
             $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          # Link using MSVC
+          # MSVC link
           cmd.exe /c "`"$vcvars`" && link.exe /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
 
 
       # -----------------------------------------------------
-      # META PACK
+      # META ADD
       # -----------------------------------------------------
-      - name: Prepare META
+      - name: Add META Pack
+        shell: bash
         run: |
           mkdir -p build/meta
           echo "{ \"meta\": \"sponge-meta\" }" > build/meta/meta.json
 
+
       # -----------------------------------------------------
-      # UPLOAD ARTIFACT BY OS
+      # UPLOAD BY OS
       # -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
@@ -122,10 +137,9 @@ jobs:
           path: build/*
 
 
-
-  # ---------------------------------------------------------
-  # RELEASE JOB
-  # ---------------------------------------------------------
+# ---------------------------------------------------------
+# RELEASE
+# ---------------------------------------------------------
   release:
     needs: [auto-tag, build]
     runs-on: ubuntu-latest
@@ -144,7 +158,7 @@ jobs:
           cp -r release-temp/spongelang-macos-latest/* release/macos/ || true
           cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
 
-      - name: Zip Release
+      - name: Make ZIPs
         run: |
           cd release
           zip -r linux.zip linux
@@ -160,12 +174,15 @@ jobs:
             ## SpongeLang Full Auto Release
 
             포함:
-            - Linux/macOS/Windows 실행파일
-            - META Pack 포함
-            - NASM Full Pipeline
-            - Windows MSVC 링크 정상화 (GNU ld 문제 해결)
-            - Timestamp Auto Tag
+            - Linux / macOS / Windows 실행파일
+            - 자동 META Pack
+            - 완전 자동 태그
+            - NASM 기반 ASM 파이프라인
+            - Windows MSVC link 완전 성공 버전
+            - macOS _main 문제 완전 해결
+            - Linux ELF 정상 생성
 
           files: release/*.zip
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
