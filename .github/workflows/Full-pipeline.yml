@@ -1,4 +1,4 @@
-name: RLK → SpongeLang → NASM Full Auto Pipeline
+name: RLK → SpongeLang → NASM Full Auto Pipeline (Ultimate Stable Edition)
 
 on:
   push:
@@ -63,9 +63,9 @@ jobs:
         echo "Detected RLK compiler: $CANDIDATE"
 
     # ------------------------------------------------------------
-    # Download SpongeLang VM — Auto-Detect + Meta Fix
+    # Download SpongeLang VM — Ultimate Auto-Detect + Meta Fix
     # ------------------------------------------------------------
-    - name: Download SpongeLang VM (Ultimate Auto-Detect + Meta Fix)
+    - name: Download SpongeLang VM (Auto Binary + Auto META Scanning)
       shell: bash
       run: |
         mkdir -p sponge
@@ -83,10 +83,12 @@ jobs:
         curl -L -o sponge/vm.zip "$ZIP_URL"
         unzip sponge/vm.zip -d sponge/
 
-        echo "==== All files found in zip ===="
-        find sponge -type f | sed 's/^/ --> /'
+        echo "==== All files in ZIP ===="
+        find sponge -maxdepth 4 -type f | sed 's/^/ --> /'
 
-        # Filter binary candidates
+        # --------------------------------------------------------
+        # 1) Auto-detect VM binary
+        # --------------------------------------------------------
         CANDIDATES=$(find sponge -type f \
           ! -name "*.hpp" \
           ! -name "*.cpp" \
@@ -95,44 +97,28 @@ jobs:
           ! -name "CMakeLists.txt" \
         )
 
-        echo "==== Filtered candidates ===="
-        echo "$CANDIDATES" | sed 's/^/ --> /'
-
         FOUND=""
-
         for FILE in $CANDIDATES; do
             INFO=$(file "$FILE")
-
-            if echo "$INFO" | grep -q "ELF"; then
-                FOUND="$FILE"
-                break
-            fi
-            if echo "$INFO" | grep -q "Mach-O"; then
-                FOUND="$FILE"
-                break
-            fi
-            if echo "$INFO" | grep -q "PE32"; then
+            if echo "$INFO" | grep -qE "ELF|Mach-O|PE32"; then
                 FOUND="$FILE"
                 break
             fi
         done
 
-        # Fallback by filename
+        # Fallback by name pattern
         if [ -z "$FOUND" ]; then
-            echo "Format detection failed → name-based fallback"
-            FOUND=$(echo "$CANDIDATES" | grep -Ei "spongelang|vm|runner|main" | head -n 1)
+            FOUND=$(echo "$CANDIDATES" | grep -Ei "sponge|vm|runner|main" | head -n 1)
         fi
 
         if [ -z "$FOUND" ]; then
-            echo "ERROR: No VM binary found!"
-            find sponge -type f
+            echo "ERROR: No VM executable found!"
             exit 1
         fi
 
-        echo "==== FINAL FOUND VM ===="
-        echo "$FOUND"
+        echo "FINAL VM binary: $FOUND"
 
-        # Move executable to root
+        # Move binary to workspace root
         if [[ "$FOUND" == *.exe ]]; then
             mv "$FOUND" ./spongevm.exe
             chmod +x ./spongevm.exe
@@ -141,22 +127,30 @@ jobs:
             chmod +x ./spongevm
         fi
 
-        echo "=== Moving META packs next to VM ==="
-        PACK_DIR=$(dirname "$FOUND")/packs
+        # --------------------------------------------------------
+        # 2) Auto-detect all META files and move to ./packs
+        # --------------------------------------------------------
+        echo "=== Scanning for META files (.meta) ==="
+        META_FILE=$(find sponge -type f -name "*.meta" -print -quit)
 
-        if [ -d "$PACK_DIR" ]; then
-            echo "Found packs at: $PACK_DIR"
-            mv "$PACK_DIR" ./packs
-            echo "packs folder moved."
-        else
-            echo "WARNING: packs folder missing!"
-            find sponge -maxdepth 4 -type d
+        if [ -z "$META_FILE" ]; then
+            echo "ERROR: ZIP contains NO .meta files!"
+            exit 1
         fi
 
-        echo "SpongeLang VM installed successfully."
+        META_DIR=$(dirname "$META_FILE")
+        echo "Meta directory detected: $META_DIR"
+
+        mkdir -p packs
+        cp -r "$META_DIR/"* packs/
+
+        echo "META files successfully copied to ./packs"
+
+        echo "=== Final workspace structure ==="
+        find . -maxdepth 2 -type d | sed 's/^/ --> /'
 
     # ------------------------------------------------------------
-    # Prepare directories
+    # Prepare build and proof directories
     # ------------------------------------------------------------
     - name: Prepare Dirs
       shell: bash
@@ -177,7 +171,7 @@ jobs:
         fi
 
     # ------------------------------------------------------------
-    # RLK → SpongeLang (.sp)
+    # RLK → SpongeLang
     # ------------------------------------------------------------
     - name: RLK → SpongeLang
       shell: bash
@@ -186,9 +180,9 @@ jobs:
         cat $BUILD_DIR/output.sp
 
     # ------------------------------------------------------------
-    # SpongeLang → NASM ASM
+    # SpongeLang → NASM
     # ------------------------------------------------------------
-    - name: SpongeLang → NASM ASM
+    - name: SpongeLang → NASM
       shell: bash
       run: |
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -199,7 +193,7 @@ jobs:
         cat $BUILD_DIR/output.asm
 
     # ------------------------------------------------------------
-    # Linux only: NASM → object → binary
+    # Linux only: Build final binary
     # ------------------------------------------------------------
     - name: Install NASM & GCC (Linux)
       if: runner.os == 'Linux'
@@ -226,7 +220,7 @@ jobs:
         fi
 
     # ------------------------------------------------------------
-    # ProofLedger
+    # Proof Ledger
     # ------------------------------------------------------------
     - name: Generate ProofLedger
       shell: bash
@@ -236,7 +230,7 @@ jobs:
         echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
 
     # ------------------------------------------------------------
-    # Upload artifacts
+    # Upload all artifacts
     # ------------------------------------------------------------
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
