@@ -1,4 +1,4 @@
-name: RLK → SpongeLang → NASM Full Auto Pipeline (Absolute Stable Edition)
+name: "SpongeLang — FULL AUTO Build + Auto META + Release (No External ZIP)"
 
 on:
   push:
@@ -8,236 +8,144 @@ on:
 permissions:
   contents: write
 
-env:
-  BUILD_DIR: build
-  PROOF_DIR: proof
 
+# =====================================================================
+# AUTO TAG
+# =====================================================================
 jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag-step.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate timestamp tag
+        id: tag-step
+        run: |
+          TAG="v$(date +'%Y%m%d%H%M%S')"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Push tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag ${{ steps.tag-step.outputs.tag }}
+          git push origin ${{ steps.tag-step.outputs.tag }}
+
+
+# =====================================================================
+# BUILD JOB (Linux / Mac / Windows)
+# =====================================================================
   build:
+    needs: auto-tag
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-13, windows-latest]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    # ------------------------------------------------------------
-    # Checkout
-    # ------------------------------------------------------------
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
 
-    # ------------------------------------------------------------
-    # Install Rust
-    # ------------------------------------------------------------
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      # -----------------------------
+      # CMAKE BUILD
+      # -----------------------------
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-    # ------------------------------------------------------------
-    # Build RLK Compiler
-    # ------------------------------------------------------------
-    - name: Build RLK Compiler
-      shell: bash
-      run: cargo build --release
+      - name: Build
+        run: cmake --build build --config Release
 
-    # ------------------------------------------------------------
-    # Detect RLK Compiler Binary
-    # ------------------------------------------------------------
-    - name: Detect RLK Binary
-      shell: bash
-      run: |
-        CANDIDATE=$(find ./target/release -maxdepth 1 -type f \
-          \( -name "rlkc" -o -name "rlkc.exe" -o -name "rust-like-kotlin" -o -name "rust-like-kotlin.exe" \) \
-          | head -n 1)
+      - name: Install
+        run: cmake --install build --config Release
 
-        if [ -z "$CANDIDATE" ]; then
-            echo "ERROR: RLK compiler not found!"
-            exit 1
-        fi
+      # -----------------------------
+      # Install Python + PyYAML
+      # -----------------------------
+      - name: Install Python Dependencies
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pyyaml
 
-        echo "RLK_PATH=$CANDIDATE" >> $GITHUB_ENV
-        echo "Detected RLK compiler: $CANDIDATE"
+      # -----------------------------
+      # AUTO META GENERATION
+      # -----------------------------
+      - name: Generate META Pack
+        shell: bash
+        run: |
+          python3 tools/generate_meta.py
+          mkdir -p build/bin/packs
+          cp -r packs/* build/bin/packs/
 
-    # ------------------------------------------------------------
-    # Download SpongeLang VM (auto detect + auto meta fix)
-    # ------------------------------------------------------------
-    - name: Download SpongeLang VM (Ultimate Auto-Detect + META Fix)
-      shell: bash
-      run: |
-        mkdir -p sponge
+      # -----------------------------
+      # DEBUG
+      # -----------------------------
+      - name: Debug Build Output
+        shell: bash
+        run: |
+          echo "==== build/bin ===="
+          ls -al build/bin || true
+          echo "==== build/bin/packs ===="
+          ls -al build/bin/packs || true
 
-        # Select correct ZIP by OS
-        if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/linux.zip"
-        elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/macos.zip"
-        else
-            ZIP_URL="https://github.com/Freeing-the-Lang/Sponge-lang/releases/latest/download/windows.zip"
-        fi
+      # -----------------------------
+      # UPLOAD BINARY ARTIFACTS
+      # -----------------------------
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spongelang-${{ matrix.os }}
+          path: build/bin/*
+          if-no-files-found: error
 
-        curl -L -o sponge/vm.zip "$ZIP_URL"
-        unzip sponge/vm.zip -d sponge/
 
-        # --- Auto detect executable ---
-        CANDIDATES=$(find sponge -type f \
-          ! -name "*.hpp" ! -name "*.cpp" ! -name "*.txt" \
-          ! -name "*.md" ! -name "CMakeLists.txt")
-
-        FOUND=""
-        for FILE in $CANDIDATES; do
-            INFO=$(file "$FILE")
-            if echo "$INFO" | grep -qE "ELF|Mach-O|PE32"; then
-                FOUND="$FILE"
-                break
-            fi
-        done
-
-        if [ -z "$FOUND" ]; then
-            FOUND=$(echo "$CANDIDATES" | grep -Ei "sponge|vm|runner|main" | head -n 1)
-        fi
-
-        if [ -z "$FOUND" ]; then
-            echo "ERROR: No VM binary detected!"
-            exit 1
-        fi
-
-        # --- Move binary to root ---
-        if [[ "$FOUND" == *.exe ]]; then
-            mv "$FOUND" ./spongevm.exe
-            chmod +x ./spongevm.exe
-        else
-            mv "$FOUND" ./spongevm
-            chmod +x ./spongevm
-        fi
-
-        # --- Auto detect META folder wherever it is ---
-        META_FILE=$(find sponge -type f -name "*.meta" -print -quit)
-        if [ -z "$META_FILE" ]; then
-            echo "ERROR: No .meta files found in ZIP!"
-            exit 1
-        fi
-        META_DIR=$(dirname "$META_FILE")
-
-        mkdir -p packs
-        cp -r "$META_DIR/"* packs/
-
-        echo "VM + META installation complete."
-
-    # ------------------------------------------------------------
-    # Prepare Dirs
-    # ------------------------------------------------------------
-    - name: Prepare Dirs
-      shell: bash
-      run: |
-        mkdir -p $BUILD_DIR
-        mkdir -p $PROOF_DIR
-
-    # ------------------------------------------------------------
-    # Ensure example RLK file
-    # ------------------------------------------------------------
-    - name: Ensure example RLK exists
-      shell: bash
-      run: |
-        if [ ! -f examples/hello.rlk ]; then
-            mkdir -p examples
-            echo "let x = 10;" > examples/hello.rlk
-            echo "print(x);" >> examples/hello.rlk
-        fi
-
-    # ------------------------------------------------------------
-    # RLK → SpongeLang
-    # ------------------------------------------------------------
-    - name: RLK → SpongeLang
-      shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE"
-        $RLK_PATH examples/hello.rlk > $BUILD_DIR/output.sp
-        cat $BUILD_DIR/output.sp
-
-    # ------------------------------------------------------------
-    # SpongeLang → NASM (cwd fix!)
-    # ------------------------------------------------------------
-    - name: SpongeLang → NASM ASM
-      shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE"    # ★★★★★ 핵심 fix (cwd 강제)
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./spongevm.exe --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/output.asm
-        else
-            ./spongevm --emit-nasm $BUILD_DIR/output.sp -o $BUILD_DIR/output.asm
-        fi
-        cat $BUILD_DIR/output.asm
-
-    # ------------------------------------------------------------
-    # Linux: assemble → link
-    # ------------------------------------------------------------
-    - name: Install NASM & GCC (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y nasm gcc
-
-    - name: Build Binary (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        nasm -f elf64 $BUILD_DIR/output.asm -o $BUILD_DIR/output.o
-        gcc $BUILD_DIR/output.o -o $BUILD_DIR/output.bin
-
-    # ------------------------------------------------------------
-    # SHA256 Proof
-    # ------------------------------------------------------------
-    - name: Generate SHA256 Proof
-      shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE"
-        if command -v sha256sum ; then
-            sha256sum $BUILD_DIR/* > $PROOF_DIR/sha256_${{ matrix.os }}.txt
-        else
-            shasum -a 256 $BUILD_DIR/* > $PROOF_DIR/sha256_${{ matrix.os }}.txt
-        fi
-
-    # ------------------------------------------------------------
-    # ProofLedger
-    # ------------------------------------------------------------
-    - name: Generate ProofLedger
-      shell: bash
-      run: |
-        cd "$GITHUB_WORKSPACE"
-        echo "OS: ${{ matrix.os }}" > $PROOF_DIR/proofledger_${{ matrix.os }}.txt
-        echo "Commit: $GITHUB_SHA" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
-        echo "Timestamp: $(date)" >> $PROOF_DIR/proofledger_${{ matrix.os }}.txt
-
-    # ------------------------------------------------------------
-    # Upload artifacts
-    # ------------------------------------------------------------
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: RLK-Pipeline-${{ matrix.os }}
-        path: |
-          build/
-          proof/
-          spongevm*
-          packs/
-
-# =============================================================
+# =====================================================================
 # RELEASE JOB
-# =============================================================
-  release:
-    needs: build
+# =====================================================================
+  auto-release:
+    needs: [auto-tag, build]
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
 
-    - name: Publish Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v1.${{ github.run_number }}
-        name: "RLK Full Auto Pipeline v1.${{ github.run_number }}"
-        files: |
-          RLK-Pipeline-ubuntu-latest/**
-          RLK-Pipeline-macos-latest/**
-          RLK-Pipeline-windows-latest/**
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-temp
+
+      - name: Organize Release Files
+        run: |
+          mkdir -p release/linux release/macos release/windows
+
+          cp -r release-temp/spongelang-ubuntu-latest/* release/linux/ || true
+          cp -r release-temp/spongelang-macos-13/* release/macos/ || true
+          cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
+
+      - name: Create Release ZIPs
+        run: |
+          cd release
+          zip -r linux.zip linux
+          zip -r macos.zip macos
+          zip -r windows.zip windows
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.auto-tag.outputs.tag }}
+          name: "SpongeLang — FULL AUTO + META — ${{ needs.auto-tag.outputs.tag }}"
+          body: |
+            ## SpongeLang Full Auto Release
+
+            Included:
+            - Linux/macOS/Windows binaries
+            - Auto-generated META runtime pack
+            - Timestamp Auto Tag
+            - No external ZIP — full self-contained build
+
+          files: release/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
