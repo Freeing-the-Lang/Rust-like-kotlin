@@ -1,4 +1,4 @@
-name: "SpongeLang — Real Compile (rlkc → ASM → EXE) + META + Auto Release"
+name: "SpongeLang — FULL AUTO Build + META + Release"
 
 on:
   push:
@@ -8,171 +8,149 @@ on:
 permissions:
   contents: write
 
-
 jobs:
-  # ===========================================================
-  # 1) AUTO TAG
-  # ===========================================================
+  # ============================================================
+  # AUTO TAG
+  # ============================================================
   auto-tag:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.tag-step.outputs.tag }}
-
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate timestamp tag
-        id: tag-step
+      - name: Generate Tag
+        id: tag
         run: |
           TAG="v$(date +'%Y%m%d%H%M%S')"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Push tag
+      - name: Push Tag
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git tag ${{ steps.tag-step.outputs.tag }}
-          git push origin ${{ steps.tag-step.outputs.tag }}
+          git tag ${{ steps.tag.outputs.tag }}
+          git push origin ${{ steps.tag.outputs.tag }}
 
-
-  # ===========================================================
-  # 2) BUILD JOB — 3 OS
-  # ===========================================================
+  # ============================================================
+  # BUILD (Linux / macOS / Windows)
+  # ============================================================
   build:
     needs: auto-tag
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Rust compiler setup
+      # Rust setup
       - uses: dtolnay/rust-toolchain@stable
 
-      # Install NASM + Windows linker
-      - name: Install Assemblers
-        shell: bash
+      # NASM installs
+      - name: Install NASM (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            choco install nasm -y
-            choco install mingw -y
-            echo "C:/tools/mingw64/bin" >> $GITHUB_PATH
+          sudo apt-get update
+          sudo apt-get install -y nasm
 
-          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
-            brew install nasm
+      - name: Install NASM (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install nasm
 
-          else
-            sudo apt-get update -y
-            sudo apt-get install -y nasm
-          fi
+      - name: Install NASM (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install nasm -y
 
-      # ======================================================
-      # 1) Cargo build → rlkc compiler
-      # ======================================================
-      - name: Build SpongeLang Compiler (Rust rlkc)
-        shell: bash
+      # Build compiler
+      - name: Build rlkc
         run: cargo build --release
 
-      # Detect binary name
-      - name: Detect Compiler Path
-        id: exe
+      - name: Prepare folders
+        run: mkdir -p build/meta build/bin
+
+      # ==================================================================
+      # COMPILE SpongeLang → ASM
+      # ==================================================================
+      - name: Compile SpongeLang Input
         shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            echo "compiler=target/release/rlkc.exe" >> $GITHUB_OUTPUT
+          ./target/release/rlkc > build/out.asm
+
+      # ==================================================================
+      # Assemble & Link
+      # ==================================================================
+      - name: Build Executable (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          nasm -felf64 build/out.asm -o build/out.o
+          ld build/out.o -o build/bin/spongelang
+
+      - name: Build Executable (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          nasm -fmacho64 build/out.asm -o build/out.o
+          ld build/out.o -o build/bin/spongelang
+
+      - name: Build Executable (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          nasm -fwin64 build/out.asm -o build/out.obj
+          link.exe build/out.obj /SUBSYSTEM:CONSOLE /OUT:build\bin\spongelang.exe
+
+      # ==================================================================
+      # META PACK AUTO GEN
+      # ==================================================================
+      - name: Generate META Pack
+        shell: bash
+        run: |
+          OS="${{ matrix.os }}"
+          TS=$(date +'%Y-%m-%d %H:%M:%S')
+          SHA=$(git rev-parse HEAD)
+
+          echo "os: $OS" > build/meta/meta.yml
+          echo "timestamp: $TS" >> build/meta/meta.yml
+          echo "commit: $SHA" >> build/meta/meta.yml
+          echo "compiler: rlkc (SpongeLang Static Type Compiler)" >> build/meta/meta.yml
+
+          # sha256
+          if [[ "$OS" == "windows-latest" ]]; then
+            CERTUTIL_OUTPUT=$(certutil -hashfile build/bin/spongelang.exe SHA256 | findstr /v "hash")
+            echo "sha256: $CERTUTIL_OUTPUT" >> build/meta/meta.yml
           else
-            echo "compiler=target/release/rlkc" >> $GITHUB_OUTPUT
+            SHA=$(sha256sum build/bin/spongelang | awk '{print $1}' || sha256sum build/bin/spongelang.exe | awk '{print $1}')
+            echo "sha256: $SHA" >> build/meta/meta.yml
           fi
 
+          # input.sp info
+          echo "input_size: $(wc -c < input.sp)" >> build/meta/meta.yml
 
-      # ======================================================
-      # 2) REAL SpongeLang → ASM (NO dummy)
-      # ======================================================
-      - name: Generate ASM via rlkc (REAL)
+      # ==================================================================
+      # PACKAGE
+      # ==================================================================
+      - name: Create ZIP
         shell: bash
         run: |
-          mkdir -p generated
+          ZIPNAME="spongelang-${{ matrix.os }}.zip"
+          cd build
+          zip -r "../${ZIPNAME}" bin meta
 
-          if [[ ! -f input.sp ]]; then
-            echo "❌ ERROR: input.sp not found in repo root"
-            exit 1
-          fi
-
-          echo "input.sp found — running real SpongeLang compilation"
-          ${{ steps.exe.outputs.compiler }} input.sp > generated/out.asm
-
-          echo "--- ASM generated ---"
-          ls -al generated
-
-
-      # ======================================================
-      # 3) NASM → OBJ
-      # ======================================================
-      - name: Assemble (NASM → OBJ)
-        shell: bash
-        run: |
-          mkdir -p build
-
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            nasm -f win64 generated/out.asm -o build/out.obj
-          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
-            nasm -f macho64 generated/out.asm -o build/out.o
-          else
-            nasm -f elf64 generated/out.asm -o build/out.o
-          fi
-
-
-      # ======================================================
-      # 4) Link → Native Executable
-      # ======================================================
-      - name: Link Native Executable
-        shell: bash
-        run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            x86_64-w64-mingw32-gcc build/out.obj -o build/spongelang.exe
-
-          elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
-            ld -o build/spongelang build/out.o -macosx_version_min 10.15 -lSystem
-
-          else
-            ld -o build/spongelang build/out.o
-          fi
-
-
-      # ======================================================
-      # 5) META Pack
-      # ======================================================
-      - name: META Pack
-        shell: bash
-        run: |
-          mkdir -p build/packs
-          echo "Meta Information" > build/packs/meta.txt
-
-
-      - name: Debug Build Output
-        shell: bash
-        run: |
-          echo "===== build ====="
-          ls -al build
-
-
+      # Upload
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
-          path: build/**
-          if-no-files-found: error
+          path: spongelang-${{ matrix.os }}.zip
 
 
-
-  # ===========================================================
-  # 3) AUTO RELEASE JOB
-  # ===========================================================
-  auto-release:
+  # ============================================================
+  # RELEASE
+  # ============================================================
+  release:
     needs: [auto-tag, build]
     runs-on: ubuntu-latest
 
@@ -181,38 +159,17 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: release-temp
-
-      - name: Organize Release Files
-        run: |
-          mkdir -p release/linux release/macos release/windows
-
-          cp -r release-temp/spongelang-ubuntu-latest/*   release/linux/   || true
-          cp -r release-temp/spongelang-macos-13/*        release/macos/   || true
-          cp -r release-temp/spongelang-windows-latest/*  release/windows/ || true
-
-
-      - name: Create ZIPs
-        run: |
-          cd release
-          zip -r linux.zip linux
-          zip -r macos.zip macos
-          zip -r windows.zip windows
-
+          path: release-files
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang Release — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang META Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang (Rust rlkc → ASM → Native EXE)
-            - Real SpongeLang compilation (no dummy)
-            - Parses input.sp
-            - ASM generated from real source
-            - NASM → Native executables (Linux/macOS/Windows)
-            - META included
-            - Auto timestamp tag
-          files: release/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            SpongeLang Full Auto META Release  
+            - 3 OS binaries  
+            - META Pack  
+            - Static Type SpongeLang Compiler  
+            - Input + ASM + EXE  
+          files: release-files/**/*.zip
