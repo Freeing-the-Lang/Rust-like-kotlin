@@ -8,7 +8,7 @@ impl Codegen {
     }
 
     // ============================================================
-    //  ENTRY POINT (OS별 자동 처리)
+    //  ENTRY POINT (3 OS 자동 대응)
     // ============================================================
     pub fn generate(&self, program: &IRProgram) -> String {
         let mut out = String::new();
@@ -17,7 +17,7 @@ impl Codegen {
         out.push_str(";   SpongeLang → IR → NASM Codegen (2025)  \n");
         out.push_str("; =========================================\n\n");
 
-        // macOS는 _main, 그 외 OS는 main
+        // macOS는 _main, Linux/Windows는 main
         out.push_str("%ifdef __MACOS__\n");
         out.push_str("global _main\n");
         out.push_str("_main:\n");
@@ -33,7 +33,7 @@ impl Codegen {
         out.push_str("    pop rbp\n");
         out.push_str("    ret\n\n");
 
-        // 각 IR function 출력
+        // 각 함수 IR 변환
         for func in &program.funcs {
             out.push_str(&self.generate_function(func));
         }
@@ -64,6 +64,8 @@ impl Codegen {
             self.generate_stmt(ir, &mut out, &mut locals);
         }
 
+        // 반드시 있어야 함 — 없으면 main_func.func_exit 에러 발생
+        out.push_str(".func_exit:\n");
         out.push_str("    mov rsp, rbp\n");
         out.push_str("    pop rbp\n");
         out.push_str("    ret\n\n");
@@ -95,7 +97,7 @@ impl Codegen {
             IR::If(cond, then_body, else_body) => {
                 let l_then = self.new_label("then");
                 let l_else = self.new_label("else");
-                let l_end = self.new_label("endif");
+                let l_end  = self.new_label("endif");
 
                 self.generate_expr(cond, out, locals);
 
@@ -118,17 +120,19 @@ impl Codegen {
             }
 
             IR::CallFunc(name, args) => {
-                // push args (reverse order)
                 for arg in args.iter().rev() {
                     self.generate_expr(arg, out, locals);
                     out.push_str("    push rax\n");
                 }
+
                 out.push_str(&format!("    call {}\n", name));
                 out.push_str(&format!("    add rsp, {}\n", args.len() * 8));
             }
 
-            IR::LiteralInt(_) | IR::LiteralString(_) | IR::BinaryOp(_,_,_) => {
-                panic!("IRExpr should not appear directly in IR stmt level");
+            IR::LiteralInt(_)
+            | IR::LiteralString(_)
+            | IR::BinaryOp(_, _, _) => {
+                panic!("Invalid top-level IRExpr inside IR");
             }
         }
     }
@@ -143,7 +147,7 @@ impl Codegen {
             }
 
             IRExpr::Str(_) => {
-                out.push_str("    mov rax, 0 ; string literal NYI\n");
+                out.push_str("    mov rax, 0 ; string literal not implemented\n");
             }
 
             IRExpr::Var(name) => {
@@ -154,6 +158,7 @@ impl Codegen {
             IRExpr::Binary(a, op, b) => {
                 self.generate_expr(a, out, locals);
                 out.push_str("    push rax\n");
+
                 self.generate_expr(b, out, locals);
                 out.push_str("    mov rbx, rax\n");
                 out.push_str("    pop rax\n");
@@ -163,11 +168,13 @@ impl Codegen {
                     "-" => out.push_str("    sub rax, rbx\n"),
                     "*" => out.push_str("    imul rax, rbx\n"),
                     "/" => out.push_str("    cqo\n    idiv rbx\n"),
+
                     "==" => out.push_str("    cmp rax, rbx\n    sete al\n    movzx rax, al\n"),
                     "!=" => out.push_str("    cmp rax, rbx\n    setne al\n    movzx rax, al\n"),
                     ">"  => out.push_str("    cmp rax, rbx\n    setg al\n    movzx rax, al\n"),
                     "<"  => out.push_str("    cmp rax, rbx\n    setl al\n    movzx rax, al\n"),
-                    _ => panic!("Unknown binary operator {}", op),
+
+                    _ => panic!("Unknown op {}", op),
                 }
             }
 
@@ -183,7 +190,7 @@ impl Codegen {
     }
 
     // ============================================================
-    //  Unique label generator
+    //   LABEL GENERATOR
     // ============================================================
     fn new_label(&self, prefix: &str) -> String {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -193,9 +200,9 @@ impl Codegen {
     }
 }
 
-// ============================================================
-//  Local Variable Stack Layout Handler
-// ============================================================
+///////////////////////////////////////////////////////////////
+// Local stack manager
+///////////////////////////////////////////////////////////////
 struct Locals {
     offset: i32,
     map: std::collections::HashMap<String, i32>,
@@ -219,6 +226,7 @@ impl Locals {
     }
 
     fn get(&self, name: &str) -> i32 {
-        *self.map.get(name).expect(&format!("Unknown local var {}", name))
+        *self.map.get(name)
+            .unwrap_or_else(|| panic!("Unknown local var: {}", name))
     }
 }
