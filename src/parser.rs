@@ -74,10 +74,13 @@ impl Parser {
         match self.next() {
             Token::IntType => TypeName::Int,
             Token::StringType => TypeName::String,
-            t => panic!("Expected type, got {:?}", t),
+            other => panic!("Expected type, got {:?}", other),
         }
     }
 
+    // =====================================================
+    // PROGRAM
+    // =====================================================
     pub fn parse_program(&mut self) -> Program {
         let mut funcs = Vec::new();
 
@@ -88,8 +91,10 @@ impl Parser {
         Program { funcs }
     }
 
+    // =====================================================
+    // FUNCTION
+    // =====================================================
     fn parse_function(&mut self) -> Function {
-        // func NAME (params) : TYPE { body }
         match self.next() {
             Token::Func => {}
             other => panic!("Expected 'func', got {:?}", other),
@@ -100,7 +105,6 @@ impl Parser {
         self.expect(&Token::LParen);
 
         let mut params = Vec::new();
-
         while !matches!(self.peek(), Token::RParen) {
             let pname = self.expect_ident();
             self.expect(&Token::Colon);
@@ -114,7 +118,6 @@ impl Parser {
 
         self.expect(&Token::RParen);
         self.expect(&Token::Colon);
-
         let ret_type = self.parse_type();
 
         self.expect(&Token::LBrace);
@@ -134,6 +137,9 @@ impl Parser {
         }
     }
 
+    // =====================================================
+    // STATEMENTS
+    // =====================================================
     fn parse_stmt(&mut self) -> Stmt {
         match self.peek() {
             Token::Let => self.parse_let(),
@@ -144,7 +150,7 @@ impl Parser {
     }
 
     fn parse_let(&mut self) -> Stmt {
-        self.next(); // consume "let"
+        self.next(); // let
 
         let name = self.expect_ident();
         self.expect(&Token::Colon);
@@ -152,8 +158,8 @@ impl Parser {
 
         self.expect(&Token::Assign);
         let expr = self.parse_expr();
-
         self.expect(&Token::Semicolon);
+
         Stmt::Let(name, t, expr)
     }
 
@@ -169,6 +175,7 @@ impl Parser {
 
         let cond = self.parse_expr();
 
+        // THEN BLOCK
         self.expect(&Token::LBrace);
         let mut then_body = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
@@ -176,8 +183,8 @@ impl Parser {
         }
         self.expect(&Token::RBrace);
 
+        // ELSE BLOCK
         self.expect(&Token::Else);
-
         self.expect(&Token::LBrace);
         let mut else_body = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
@@ -194,11 +201,14 @@ impl Parser {
         Stmt::ExprStmt(expr)
     }
 
+    // =====================================================
+    // EXPRESSIONS
+    // =====================================================
     fn parse_expr(&mut self) -> Expr {
-        self.parse_binary_expr()
+        self.parse_binary()
     }
 
-    fn parse_binary_expr(&mut self) -> Expr {
+    fn parse_binary(&mut self) -> Expr {
         let mut left = self.parse_primary();
 
         loop {
@@ -224,40 +234,39 @@ impl Parser {
         left
     }
 
+    // =====================================================
+    // PRIMARY (fixed version)
+    // =====================================================
     fn parse_primary(&mut self) -> Expr {
         match self.next() {
             Token::Number(n) => Expr::Number(*n),
+
             Token::StringLiteral(s) => Expr::StringLiteral(s.clone()),
 
             Token::Ident(name) => {
-    let ident_name = name.clone();
+                let ident = name.clone();
 
-    // 먼저 peek로 판단 (mutable borrow 없음)
-    let is_call = matches!(self.peek(), Token::LParen);
+                // 먼저 함수 호출인지 확인
+                let is_call = matches!(self.peek(), Token::LParen);
 
-    // 단순 변수
-    if !is_call {
-        return Expr::Var(ident_name);
-    }
-
-    // 함수 호출 처리
-    self.next(); // consume '('
-
-    let mut args = Vec::new();
-    while !matches!(self.peek(), Token::RParen) {
-        args.push(self.parse_expr());
-
-        if matches!(self.peek(), Token::Comma) {
-            self.next(); // consume ','
-        }
-    }
-
-    self.expect(&Token::RParen);
-    Expr::Call(ident_name, args)
-            }
-                } else {
-                    Expr::Var(name.clone())
+                // 변수
+                if !is_call {
+                    return Expr::Var(ident);
                 }
+
+                // 함수 호출
+                self.next(); // '('
+
+                let mut args = Vec::new();
+                while !matches!(self.peek(), Token::RParen) {
+                    args.push(self.parse_expr());
+                    if matches!(self.peek(), Token::Comma) {
+                        self.next(); // consume comma
+                    }
+                }
+
+                self.expect(&Token::RParen);
+                Expr::Call(ident, args)
             }
 
             Token::LParen => {
@@ -266,7 +275,7 @@ impl Parser {
                 expr
             }
 
-            tok => panic!("Unexpected token in primary: {:?}", tok),
+            other => panic!("Unexpected token in primary: {:?}", other),
         }
-    
-
+    }
+}
