@@ -34,7 +34,7 @@ jobs:
           git push origin ${{ steps.tag.outputs.tag }}
 
   # ==============================================================
-  # 3OS BUILD (Linux / Windows / macOS Universal Binary)
+  # BUILD ON 3 OS
   # ==============================================================
   build:
     needs: auto-tag
@@ -42,13 +42,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Build SpongeLang compiler
       - name: Build rlkc (compiler)
         run: cargo build --release
 
@@ -56,9 +54,15 @@ jobs:
         run: mkdir -p build
 
       # ============================================================
-      # LINUX
+      # LINUX — ELF64
       # ============================================================
-      - name: Build on Linux
+      - name: Install NASM (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+
+      - name: Linux Build
         if: matrix.os == 'ubuntu-latest'
         run: |
           ./target/release/rlkc > build/out.asm
@@ -68,9 +72,9 @@ jobs:
             -lc
 
       # ============================================================
-      # WINDOWS
+      # WINDOWS — x64 EXE
       # ============================================================
-      - name: Build on Windows
+      - name: Windows Build
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
@@ -85,7 +89,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install nasm
 
-      - name: Build on macOS
+      - name: macOS Build
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
@@ -108,10 +112,10 @@ jobs:
             -syslibroot "$SDK" -lSystem \
             build/out_arm.o -o build/spongelang_arm
 
-          # Merge universal binary
+          # Universal binary merge
           lipo -create -output build/spongelang build/spongelang_x86 build/spongelang_arm
 
-          # Hardened runtime codesign
+          # Hardened runtime codesign (ad-hoc)
           codesign --force --deep --options runtime --sign "-" build/spongelang
 
           # OPTIONAL: notarization
@@ -126,9 +130,9 @@ jobs:
           fi
 
       # ============================================================
-      # ZIP PACKAGE
+      # ZIP ARTIFACT
       # ============================================================
-      - name: Zip build output
+      - name: Zip output
         shell: bash
         run: |
           cd build
@@ -156,13 +160,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang FULL AUTO Release — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang FULL AUTO — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang FULL AUTO Release  
-            - Linux ELF64 binary  
+            ## SpongeLang FULL AUTO Release
+            - Linux ELF64 build  
             - Windows x64 EXE  
             - macOS Universal Binary (x86_64 + arm64)  
             - Hardened Runtime (macOS)  
-            - Auto META Pack  
             - Auto Tag + Release  
           files: release-files/**/*.zip
