@@ -3,50 +3,25 @@ mod parser;
 mod semantic;
 mod codegen;
 
-use lexer::lex;
-use parser::Parser;
-use semantic::SemanticAnalyzer;
+use lexer::*;
+use parser::*;
+use semantic::*;
 use codegen::Codegen;
 
-use std::fs;
-
 fn main() {
-    // ---------------------
-    // 1. Read input.sp file
-    // ---------------------
-    let input = match fs::read_to_string("input.sp") {
-        Ok(s) => s,
-        Err(_) => {
-            eprintln!("ERROR: input.sp not found");
-            std::process::exit(1);
-        }
-    };
+    let input = std::fs::read_to_string("input.sp")
+        .expect("Failed to read input.sp");
 
-    // ---------------------
-    // 2. Lexing
-    // ---------------------
     let tokens = lex(&input);
 
-    // ---------------------
-    // 3. Parsing
-    // ---------------------
-    let mut parser = Parser::new(tokens);   // MUST PASS Vec<Token>
-    let program = parser.parse_program();   // returns Program (not Result)
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().expect("Parse error");
 
-    // ---------------------
-    // 4. Semantic Analysis
-    // ---------------------
-    let semantic = SemanticAnalyzer::new(program);
-    let ir = semantic.analyze();   // returns IRProgram
+    let sem = SemanticAnalyzer::new(program);
+    let ir = sem.analyze();
 
-    // ---------------------
-    // 5. Codegen: IR → NASM ASM
-    // ---------------------
-    let cg = Codegen::new();
+    let cg = Codegen;
     let asm = cg.generate(&ir);
 
-    // ---------------------
-    // 6. Write ASM to stdout
-    // ---------------------
     println!("{}", asm);
 }
