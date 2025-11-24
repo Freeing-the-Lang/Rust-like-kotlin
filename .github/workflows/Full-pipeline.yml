@@ -63,9 +63,9 @@ jobs:
         echo "Detected RLK compiler: $CANDIDATE"
 
     # ------------------------------------------------------------
-    # Download SpongeLang VM — Ultimate Auto-Detect
+    # Download SpongeLang VM — Auto-Detect + Meta Fix
     # ------------------------------------------------------------
-    - name: Download SpongeLang VM (Ultimate Auto-Detect)
+    - name: Download SpongeLang VM (Ultimate Auto-Detect + Meta Fix)
       shell: bash
       run: |
         mkdir -p sponge
@@ -86,14 +86,13 @@ jobs:
         echo "==== All files found in zip ===="
         find sponge -type f | sed 's/^/ --> /'
 
-        # Filter candidate files
+        # Filter binary candidates
         CANDIDATES=$(find sponge -type f \
           ! -name "*.hpp" \
           ! -name "*.cpp" \
           ! -name "*.txt" \
           ! -name "*.md" \
           ! -name "CMakeLists.txt" \
-          ! -path "*/meta/*" \
         )
 
         echo "==== Filtered candidates ===="
@@ -101,7 +100,6 @@ jobs:
 
         FOUND=""
 
-        # Try detecting by binary format
         for FILE in $CANDIDATES; do
             INFO=$(file "$FILE")
 
@@ -119,7 +117,7 @@ jobs:
             fi
         done
 
-        # Fallback by name pattern
+        # Fallback by filename
         if [ -z "$FOUND" ]; then
             echo "Format detection failed → name-based fallback"
             FOUND=$(echo "$CANDIDATES" | grep -Ei "spongelang|vm|runner|main" | head -n 1)
@@ -134,13 +132,25 @@ jobs:
         echo "==== FINAL FOUND VM ===="
         echo "$FOUND"
 
-        # Move to workspace root
+        # Move executable to root
         if [[ "$FOUND" == *.exe ]]; then
             mv "$FOUND" ./spongevm.exe
             chmod +x ./spongevm.exe
         else
             mv "$FOUND" ./spongevm
             chmod +x ./spongevm
+        fi
+
+        echo "=== Moving META packs next to VM ==="
+        PACK_DIR=$(dirname "$FOUND")/packs
+
+        if [ -d "$PACK_DIR" ]; then
+            echo "Found packs at: $PACK_DIR"
+            mv "$PACK_DIR" ./packs
+            echo "packs folder moved."
+        else
+            echo "WARNING: packs folder missing!"
+            find sponge -maxdepth 4 -type d
         fi
 
         echo "SpongeLang VM installed successfully."
@@ -236,6 +246,7 @@ jobs:
           build/
           proof/
           spongevm*
+          packs/
           $BUILD_DIR/*
           $PROOF_DIR/*
 
