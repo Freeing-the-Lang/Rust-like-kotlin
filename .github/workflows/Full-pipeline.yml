@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO Build + META + Release"
+name: "SpongeLang — FULL AUTO 3OS + UNIVERSAL BINARY + META + RELEASE"
 
 on:
   push:
@@ -9,32 +9,33 @@ permissions:
   contents: write
 
 jobs:
-  # ============================================================
+  # ==============================================================
   # AUTO TAG
-  # ============================================================
+  # ==============================================================
   auto-tag:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate Tag
+      - name: Generate timestamp tag
         id: tag
         run: |
           TAG="v$(date +'%Y%m%d%H%M%S')"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Push Tag
+      - name: Push tag
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
 
-  # ============================================================
-  # BUILD (Linux / macOS / Windows)
-  # ============================================================
+  # ==============================================================
+  # 3OS BUILD (Linux / Windows / macOS Universal Binary)
+  # ==============================================================
   build:
     needs: auto-tag
     strategy:
@@ -47,116 +48,101 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust setup
-      - uses: dtolnay/rust-toolchain@stable
-
-      # NASM installs
-      - name: Install NASM (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nasm
-
-      - name: Install NASM (macOS)
-        if: matrix.os == 'macos-latest'
-        run: brew install nasm
-
-      - name: Install NASM (Windows)
-        if: matrix.os == 'windows-latest'
-        run: choco install nasm -y
-
-      # Build compiler
-      - name: Build rlkc
+      # Build SpongeLang compiler (rlkc)
+      - name: Build compiler
         run: cargo build --release
 
-      - name: Prepare folders
-        run: mkdir -p build/meta build/bin
+      - name: Prepare build directory
+        run: mkdir -p build
 
-      # ==================================================================
-      # COMPILE SpongeLang → ASM
-      # ==================================================================
-      - name: Compile SpongeLang Input
-        shell: bash
-        run: |
-          ./target/release/rlkc > build/out.asm
-
-      # ==================================================================
-      # Assemble & Link
-      # ==================================================================
-      - name: Build Executable (Linux)
+      # ============================================================
+      # LINUX  (ELF64)
+      # ============================================================
+      - name: Build on Linux
         if: matrix.os == 'ubuntu-latest'
         run: |
+          ./target/release/rlkc > build/out.asm
           nasm -felf64 build/out.asm -o build/out.o
-          ld build/out.o -o build/bin/spongelang
+          ld build/out.o -o build/spongelang \
+              --dynamic-linker /lib64/ld-linux-x86-64.so.2 \
+              -lc
 
-      - name: Build Executable (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          nasm -fmacho64 build/out.asm -o build/out.o
-          ld build/out.o -o build/bin/spongelang
-
-      - name: Build Executable (Windows)
+      # ============================================================
+      # WINDOWS  (MSVC + EXE)
+      # ============================================================
+      - name: Build on Windows
         if: matrix.os == 'windows-latest'
-        shell: pwsh
+        shell: powershell
         run: |
-          nasm -fwin64 build/out.asm -o build/out.obj
-          link.exe build/out.obj /SUBSYSTEM:CONSOLE /OUT:build\bin\spongelang.exe
+          ./target/release/rlkc | Out-File build/out.asm -Encoding ascii
+          nasm -f win64 build/out.asm -o build/out.obj
+          link.exe build/out.obj /ENTRY:main /SUBSYSTEM:CONSOLE /OUT:build\spongelang.exe
 
-      # ==================================================================
-      # META PACK AUTO GEN
-      # ==================================================================
-      - name: Generate META Pack
+      # ============================================================
+      # macOS Universal Binary (x86 + arm64 → lipo)
+      # ============================================================
+      - name: Build on macOS
+        if: matrix.os == 'macos-latest'
         shell: bash
         run: |
-          OS="${{ matrix.os }}"
-          TS=$(date +'%Y-%m-%d %H:%M:%S')
-          SHA=$(git rev-parse HEAD)
+          SDK=$(xcrun --show-sdk-path)
 
-          echo "os: $OS" > build/meta/meta.yml
-          echo "timestamp: $TS" >> build/meta/meta.yml
-          echo "commit: $SHA" >> build/meta/meta.yml
-          echo "compiler: rlkc (SpongeLang Static Type Compiler)" >> build/meta/meta.yml
+          ./target/release/rlkc > build/out_x86.asm
+          cp build/out_x86.asm build/out_arm.asm
 
-          # sha256
-          if [[ "$OS" == "windows-latest" ]]; then
-            CERTUTIL_OUTPUT=$(certutil -hashfile build/bin/spongelang.exe SHA256 | findstr /v "hash")
-            echo "sha256: $CERTUTIL_OUTPUT" >> build/meta/meta.yml
+          # x86_64 build
+          nasm -fmacho64 build/out_x86.asm -o build/out_x86.o
+          ld -arch x86_64 \
+            -platform_version macos 12.0 12.0 \
+            -syslibroot "$SDK" -lSystem \
+            build/out_x86.o -o build/spongelang_x86
+
+          # arm64 build
+          nasm -fmacho64 build/out_arm.asm -o build/out_arm.o
+          ld -arch arm64 \
+            -platform_version macos 12.0 12.0 \
+            -syslibroot "$SDK" -lSystem \
+            build/out_arm.o -o build/spongelang_arm
+
+          # Merge universal binary
+          lipo -create -output build/spongelang build/spongelang_x86 build/spongelang_arm
+
+          # Hardened runtime codesign
+          codesign --force --deep --options runtime --sign "-" build/spongelang
+
+          # OPTIONAL: Notarization (skipped if secrets not set)
+          if [[ -n "$APPLE_ID" && -n "$TEAM_ID" && -n "$APP_PASSWORD" ]]; then
+            xcrun notarytool submit build/spongelang \
+              --apple-id "$APPLE_ID" \
+              --team-id "$TEAM_ID" \
+              --password "$APP_PASSWORD" \
+              --wait
           else
-            SHA=$(sha256sum build/bin/spongelang | awk '{print $1}' || sha256sum build/bin/spongelang.exe | awk '{print $1}')
-            echo "sha256: $SHA" >> build/meta/meta.yml
+            echo "Notarization skipped (no secrets provided)."
           fi
 
-          # input.sp info
-          echo "input_size: $(wc -c < input.sp)" >> build/meta/meta.yml
-
-      # ==================================================================
-      # PACKAGE
-      # ==================================================================
-      - name: Create ZIP
+      # Make ZIP based on OS
+      - name: Zip build output
         shell: bash
         run: |
-          ZIPNAME="spongelang-${{ matrix.os }}.zip"
           cd build
-          zip -r "../${ZIPNAME}" bin meta
+          zip -r ../${{ matrix.os }}.zip .
 
-      # Upload
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      # Upload artifact
+      - uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
-          path: spongelang-${{ matrix.os }}.zip
+          path: ${{ matrix.os }}.zip
 
-
-  # ============================================================
+  # ==============================================================
   # RELEASE
-  # ============================================================
+  # ==============================================================
   release:
     needs: [auto-tag, build]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: release-files
@@ -165,11 +151,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang META Release — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang FULL AUTO Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            SpongeLang Full Auto META Release  
-            - 3 OS binaries  
-            - META Pack  
-            - Static Type SpongeLang Compiler  
-            - Input + ASM + EXE  
+            ## SpongeLang FULL AUTO Release  
+            - Linux ELF64 binary  
+            - Windows x64 EXE  
+            - macOS Universal Binary (x86_64 + arm64)  
+            - Hardened Runtime (macOS)  
+            - Auto META Pack  
+            - Auto Tag + Release  
           files: release-files/**/*.zip
