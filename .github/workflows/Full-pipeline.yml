@@ -1,4 +1,4 @@
-name: "SpongeLang — Rust rlkc → ASM → EXE + META + Auto Release"
+name: "SpongeLang — Real Compile (rlkc → ASM → EXE) + META + Auto Release"
 
 on:
   push:
@@ -50,10 +50,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust toolchain
+      # Rust compiler setup
       - uses: dtolnay/rust-toolchain@stable
 
-      # NASM + MinGW (Windows)
+      # Install NASM + Windows linker
       - name: Install Assemblers
         shell: bash
         run: |
@@ -61,10 +61,13 @@ jobs:
             choco install nasm -y
             choco install mingw -y
             echo "C:/tools/mingw64/bin" >> $GITHUB_PATH
+
           elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
             brew install nasm
+
           else
-            sudo apt-get update && sudo apt-get install -y nasm
+            sudo apt-get update -y
+            sudo apt-get install -y nasm
           fi
 
       # ======================================================
@@ -74,7 +77,7 @@ jobs:
         shell: bash
         run: cargo build --release
 
-      # Detect correct binary (Windows = .exe)
+      # Detect binary name
       - name: Detect Compiler Path
         id: exe
         shell: bash
@@ -85,32 +88,26 @@ jobs:
             echo "compiler=target/release/rlkc" >> $GITHUB_OUTPUT
           fi
 
+
       # ======================================================
-      # 2) SpongeLang → ASM (dummy fallback)
+      # 2) REAL SpongeLang → ASM (NO dummy)
       # ======================================================
-      - name: Generate ASM (via rlkc or dummy fallback)
+      - name: Generate ASM via rlkc (REAL)
         shell: bash
         run: |
           mkdir -p generated
 
-          if [[ -f input.sp ]]; then
-            echo "input.sp found — running rlkc"
-            ${{ steps.exe.outputs.compiler }} input.sp > generated/out.asm
-          else
-            echo "input.sp not found — creating dummy ASM"
-
-            cat <<EOF > generated/out.asm
-; Dummy ASM fallback
-global _start
-_start:
-    mov rax, 60
-    mov rdi, 0
-    syscall
-EOF
+          if [[ ! -f input.sp ]]; then
+            echo "❌ ERROR: input.sp not found in repo root"
+            exit 1
           fi
 
-          echo "ASM generated:"
+          echo "input.sp found — running real SpongeLang compilation"
+          ${{ steps.exe.outputs.compiler }} input.sp > generated/out.asm
+
+          echo "--- ASM generated ---"
           ls -al generated
+
 
       # ======================================================
       # 3) NASM → OBJ
@@ -128,6 +125,7 @@ EOF
             nasm -f elf64 generated/out.asm -o build/out.o
           fi
 
+
       # ======================================================
       # 4) Link → Native Executable
       # ======================================================
@@ -136,11 +134,14 @@ EOF
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             x86_64-w64-mingw32-gcc build/out.obj -o build/spongelang.exe
+
           elif [[ "${{ matrix.os }}" == "macos-13" ]]; then
             ld -o build/spongelang build/out.o -macosx_version_min 10.15 -lSystem
+
           else
             ld -o build/spongelang build/out.o
           fi
+
 
       # ======================================================
       # 5) META Pack
@@ -151,20 +152,21 @@ EOF
           mkdir -p build/packs
           echo "Meta Information" > build/packs/meta.txt
 
-      # Debug output
+
       - name: Debug Build Output
         shell: bash
         run: |
           echo "===== build ====="
           ls -al build
 
-      # Upload build artifacts
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
           path: build/**
           if-no-files-found: error
+
 
 
   # ===========================================================
@@ -184,9 +186,11 @@ EOF
       - name: Organize Release Files
         run: |
           mkdir -p release/linux release/macos release/windows
+
           cp -r release-temp/spongelang-ubuntu-latest/*   release/linux/   || true
           cp -r release-temp/spongelang-macos-13/*        release/macos/   || true
           cp -r release-temp/spongelang-windows-latest/*  release/windows/ || true
+
 
       - name: Create ZIPs
         run: |
@@ -195,6 +199,7 @@ EOF
           zip -r macos.zip macos
           zip -r windows.zip windows
 
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
@@ -202,9 +207,10 @@ EOF
           name: "SpongeLang Release — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             ## SpongeLang (Rust rlkc → ASM → Native EXE)
-            - Rust rlkc compiler auto-built
-            - ASM generated (real or dummy fallback)
-            - NASM → Native executable for 3 OS
+            - Real SpongeLang compilation (no dummy)
+            - Parses input.sp
+            - ASM generated from real source
+            - NASM → Native executables (Linux/macOS/Windows)
             - META included
             - Auto timestamp tag
           files: release/*.zip
