@@ -16,15 +16,14 @@ fn main() {
 
     let tokens = lex(&input);
 
-    // Parser::new 는 Vec<Token> 소유권 받음
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program();   // ✅ expect 제거
+    let program = parser.parse_program();
 
     let sem = SemanticAnalyzer::new(program);
     let ir  = sem.analyze();
 
-    let cg  = Codegen::new();
-    let asm = cg.generate(&ir);
+    let cg  = Codegen;          // 여기! new() 필요 없음
+    let asm = cg.generate(&ir); // 그대로 호출 가능
 
     println!("{}", asm);
 }
