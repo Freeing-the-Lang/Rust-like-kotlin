@@ -1,9 +1,13 @@
-name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE"
+name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE (v4.11)"
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+concurrency:
+  group: spongelang-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -23,7 +27,7 @@ jobs:
       - name: Generate timestamp tag
         id: tag-step
         run: |
-          TAG="v$(date +'%Y%m%d%H%M%S')"
+          TAG="v$(date +'%Y.%m.%d-%H%M%S')-${GITHUB_SHA::7}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Push tag
@@ -48,48 +52,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ----------------------------------------
+      # -----------------------------------------------------
+      # Input check (필수)
+      # -----------------------------------------------------
+      - name: Validate input.sp
+        shell: bash
+        run: |
+          if [ ! -f input.sp ]; then
+            echo "❌ ERROR: input.sp is missing"
+            exit 1
+          fi
+          echo "input.sp OK"
+
+      # -----------------------------------------------------
       # Build SpongeLang Compiler (Rust)
-      # ----------------------------------------
+      # -----------------------------------------------------
       - name: Cargo Build
         run: cargo build --release --verbose
 
       - name: Prepare build directory
         run: mkdir -p build
 
-      # ----------------------------------------
-      # INPUT FILE DEBUG (중요)
-      # ----------------------------------------
-      - name: DEBUG — Show input.sp
+      # -----------------------------------------------------
+      # OS-specific RLKC Run
+      # -----------------------------------------------------
+      - name: Generate ASM via rlkc (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
-        run: |
-          echo "============= INPUT.SP ============="
-          cat input.sp || echo "input.sp NOT FOUND"
-          echo "===================================="
+        run: ./target/release/rlkc > build/out.asm
 
-      # ----------------------------------------
-      # Generate ASM
-      # ----------------------------------------
-      - name: Generate ASM via rlkc
-        shell: bash
-        run: |
-          ./target/release/rlkc > build/out.asm
-
-      # ----------------------------------------
-      # DEBUG: OUT.ASM 내용 확인 (핵심)
-      # ----------------------------------------
-      - name: DEBUG — Print ASM
-        shell: bash
-        run: |
-          echo "============= OUT.ASM =============="
-          cat build/out.asm || echo "ASM NOT FOUND"
-          echo "===================================="
+      - name: Generate ASM via rlkc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\release\rlkc.exe > build/out.asm
 
       # -----------------------------------------------------
-      # Linux Build
+      # Debug ASM Output
       # -----------------------------------------------------
+      - name: Show ASM
+        shell: bash
+        run: |
+          echo "============= BUILD/OUT.ASM ============="
+          cat build/out.asm
+          echo "========================================="
+
+      # -----------------------------------------------------
+      # Platform Builds
+      # -----------------------------------------------------
+
+      # Linux
       - name: Build for Linux
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -97,11 +110,9 @@ jobs:
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/out
 
-      # -----------------------------------------------------
-      # macOS Build
-      # -----------------------------------------------------
+      # macOS
       - name: Build for macOS
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           brew install nasm
@@ -114,15 +125,13 @@ jobs:
              build/out_x86.o \
              -o build/out
 
-      # -----------------------------------------------------
-      # Windows Build
-      # -----------------------------------------------------
+      # Windows
       - name: Install NASM (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: choco install nasm -y
 
       - name: Build for Windows
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $env:Path += ";C:\Program Files\NASM"
@@ -133,19 +142,24 @@ jobs:
             $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
+          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:_main /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
 
       # -----------------------------------------------------
-      # External META JSON
+      # Auto META.json
       # -----------------------------------------------------
-      - name: Add External META
+      - name: Generate META.json
         shell: bash
         run: |
           mkdir -p build/meta
-          cp -r meta/meta.json build/meta/
+          echo "{
+            \"os\": \"${{ matrix.os }}\",
+            \"tag\": \"${{ needs.auto-tag.outputs.tag }}\",
+            \"sha\": \"${GITHUB_SHA}\",
+            \"compiled_at\": \"$(date)\"
+          }" > build/meta/meta.json
 
       # -----------------------------------------------------
-      # Upload as Artifact (3 OS)
+      # Upload Artifact
       # -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
@@ -160,8 +174,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: release-temp
@@ -184,12 +196,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang AUTO 3OS + META — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang AUTO 3OS — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang Full Auto Release
-            - 3OS 자동 빌드
-            - 완전 자동 META Pack
-            - NASM → ASM → MSVC/Xcode/ELF 자동화
-          files: release/*.zip
+            ## SpongeLang Full Auto Release — v4.11
+            - 3OS 완전 자동 빌드
+            - RLKC → ASM → NASM → LLD/MSVC 자동화
+            - META.json 자동 생성 (OS, 태그, SHA, 컴파일 시간)
+            - ZIP 패키지 자동 구성
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
