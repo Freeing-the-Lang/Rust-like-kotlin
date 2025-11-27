@@ -34,33 +34,56 @@ jobs:
           git push origin ${{ steps.tag-step.outputs.tag }}
 
 # ---------------------------------------------------------
-# BUILD JOB (3 OS)
+# BUILD JOB — 3 OS
 # ---------------------------------------------------------
   build:
     needs: auto-tag
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
-      
-      # ----------------------------
-      # Build SpongeLang Compiler
-      # ----------------------------
+
+      # ----------------------------------------
+      # Build SpongeLang Compiler (Rust)
+      # ----------------------------------------
       - name: Cargo Build
         run: cargo build --release --verbose
 
-      - name: Prepare build dir
+      - name: Prepare build directory
         run: mkdir -p build
 
+      # ----------------------------------------
+      # INPUT FILE DEBUG (중요)
+      # ----------------------------------------
+      - name: DEBUG — Show input.sp
+        shell: bash
+        run: |
+          echo "============= INPUT.SP ============="
+          cat input.sp || echo "input.sp NOT FOUND"
+          echo "===================================="
+
+      # ----------------------------------------
+      # Generate ASM
+      # ----------------------------------------
       - name: Generate ASM via rlkc
         shell: bash
         run: |
           ./target/release/rlkc > build/out.asm
+
+      # ----------------------------------------
+      # DEBUG: OUT.ASM 내용 확인 (핵심)
+      # ----------------------------------------
+      - name: DEBUG — Print ASM
+        shell: bash
+        run: |
+          echo "============= OUT.ASM =============="
+          cat build/out.asm || echo "ASM NOT FOUND"
+          echo "===================================="
 
       # -----------------------------------------------------
       # Linux Build
@@ -84,7 +107,6 @@ jobs:
           brew install nasm
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
-
           ld -macosx_version_min 11.0 \
              -syslibroot $SDK \
              -lSystem \
@@ -114,7 +136,7 @@ jobs:
           cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
 
       # -----------------------------------------------------
-      # External META JSON → build/meta 로 복사
+      # External META JSON
       # -----------------------------------------------------
       - name: Add External META
         shell: bash
@@ -123,7 +145,7 @@ jobs:
           cp -r meta/meta.json build/meta/
 
       # -----------------------------------------------------
-      # Upload Artifacts
+      # Upload as Artifact (3 OS)
       # -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
@@ -134,7 +156,7 @@ jobs:
 # RELEASE JOB
 # ---------------------------------------------------------
   release:
-    needs: [auto-tag, build]
+    needs: [ auto-tag, build ]
     runs-on: ubuntu-latest
 
     steps:
@@ -166,8 +188,8 @@ jobs:
           body: |
             ## SpongeLang Full Auto Release
             - 3OS 자동 빌드
-            - 완전 자동 META Pack (외부 JSON)
-            - NASM → ASM → MSVC/Xcode/ELF 자동 파이프라인
+            - 완전 자동 META Pack
+            - NASM → ASM → MSVC/Xcode/ELF 자동화
           files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
