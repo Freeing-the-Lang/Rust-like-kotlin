@@ -47,22 +47,23 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
+      
+      # ----------------------------
       # Build SpongeLang Compiler
+      # ----------------------------
       - name: Cargo Build
         run: cargo build --release --verbose
 
-      - name: Prepare build
+      - name: Prepare build dir
         run: mkdir -p build
 
-      # SpongeLang → ASM
-      - name: Generate ASM
+      - name: Generate ASM via rlkc
         shell: bash
         run: |
           ./target/release/rlkc > build/out.asm
 
       # -----------------------------------------------------
-      #   L I N U X
+      # Linux Build
       # -----------------------------------------------------
       - name: Build for Linux
         if: matrix.os == 'ubuntu-latest'
@@ -74,7 +75,7 @@ jobs:
           ld build/out.o -o build/out
 
       # -----------------------------------------------------
-      #   M A C O S
+      # macOS Build
       # -----------------------------------------------------
       - name: Build for macOS
         if: matrix.os == 'macos-latest'
@@ -84,7 +85,6 @@ jobs:
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
 
-          # ld 안정화: 반드시 _main 지정
           ld -macosx_version_min 11.0 \
              -syslibroot $SDK \
              -lSystem \
@@ -93,9 +93,9 @@ jobs:
              -o build/out
 
       # -----------------------------------------------------
-      #   W I N D O W S
+      # Windows Build
       # -----------------------------------------------------
-      - name: Install NASM on Windows
+      - name: Install NASM (Windows)
         if: matrix.os == 'windows-latest'
         run: choco install nasm -y
 
@@ -103,39 +103,27 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # PATH 안정성 보강
           $env:Path += ";C:\Program Files\NASM"
-
           nasm -f win64 build/out.asm -o build/out.obj
 
-          # Find vcvars64
           $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
           if (!(Test-Path $vcvars)) {
             $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          # MSVC link (엔트리 안정화)
           cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
 
       # -----------------------------------------------------
-      # META PACK
+      # External META JSON → build/meta 로 복사
       # -----------------------------------------------------
-      - name: Add META Pack
+      - name: Add External META
         shell: bash
         run: |
           mkdir -p build/meta
-          cat <<EOF > build/meta/meta.json
-{
-  "meta": "sponge-meta",
-  "timestamp": "${{ needs.auto-tag.outputs.tag }}",
-  "os": "${{ matrix.os }}",
-  "compiler": "rlkc",
-  "pipeline": "ASM → NASM → LINK"
-}
-EOF
+          cp -r meta/meta.json build/meta/
 
       # -----------------------------------------------------
-      # UPLOAD BY OS
+      # Upload Artifacts
       # -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
@@ -143,7 +131,7 @@ EOF
           path: build/*
 
 # ---------------------------------------------------------
-# RELEASE
+# RELEASE JOB
 # ---------------------------------------------------------
   release:
     needs: [auto-tag, build]
@@ -151,19 +139,19 @@ EOF
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: release-temp
 
-      - name: Organize Release
+      - name: Organize Release Files
         run: |
           mkdir -p release/linux release/macos release/windows
-
           cp -r release-temp/spongelang-ubuntu-latest/* release/linux/ || true
           cp -r release-temp/spongelang-macos-latest/* release/macos/ || true
           cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
 
-      - name: Make ZIPs
+      - name: Make ZIP Packages
         run: |
           cd release
           zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
@@ -177,17 +165,9 @@ EOF
           name: "SpongeLang AUTO 3OS + META — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             ## SpongeLang Full Auto Release
-
-            포함:
-            - Linux / macOS / Windows 실행파일
-            - 확장 META Pack (OS/타임스탬프/파이프라인 정보)
-            - 완전 자동 태그
-            - NASM ASM 파이프라인
-            - macOS _main 완전 고정
-            - Windows MSVC 링크 안정화
-            - Linux ELF 정상 빌드
-
+            - 3OS 자동 빌드
+            - 완전 자동 META Pack (외부 JSON)
+            - NASM → ASM → MSVC/Xcode/ELF 자동 파이프라인
           files: release/*.zip
-
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
