@@ -3,19 +3,28 @@ use std::fmt::Write;
 
 pub struct Codegen;
 
+// OS별 엔트리 심볼 자동 선택
+#[cfg(target_os = "windows")]
+const ENTRY: &str = "main";
+
+#[cfg(not(target_os = "windows"))]
+const ENTRY: &str = "_main";
+
 impl Codegen {
     pub fn generate(&self, ir: &IRProgram) -> String {
         let mut out = String::new();
 
-        writeln!(&mut out, "global _main").unwrap();
+        // global 선언
+        writeln!(&mut out, "global {}", ENTRY).unwrap();
 
+        // 각 함수 생성
         for f in &ir.funcs {
             self.gen_function(&mut out, f);
         }
 
-        // main 함수 route
+        // main 함수가 존재하면 엔트리 생성
         if ir.funcs.iter().any(|f| f.name == "main") {
-            writeln!(&mut out, "_main:").unwrap();
+            writeln!(&mut out, "{}:", ENTRY).unwrap();
             writeln!(&mut out, "    call main_func").unwrap();
             writeln!(&mut out, "    ret").unwrap();
         }
