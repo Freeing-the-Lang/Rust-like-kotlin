@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE (v4.11.2)"
+name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE (Windows Fix)"
 
 on:
   push:
@@ -12,9 +12,6 @@ concurrency:
 permissions:
   contents: write
 
-# ---------------------------------------------------------
-# AUTO TAG
-# ---------------------------------------------------------
 jobs:
   auto-tag:
     runs-on: ubuntu-latest
@@ -37,9 +34,6 @@ jobs:
           git tag ${{ steps.tag-step.outputs.tag }}
           git push origin ${{ steps.tag-step.outputs.tag }}
 
-# ---------------------------------------------------------
-# BUILD JOB — 3 OS
-# ---------------------------------------------------------
   build:
     needs: auto-tag
     strategy:
@@ -52,54 +46,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # -----------------------------------------------------
-      # Input check
-      # -----------------------------------------------------
-      - name: Validate input.sp
+      - name: Check input.sp
         shell: bash
         run: |
           if [ ! -f input.sp ]; then
-            echo "❌ ERROR: input.sp is missing"
+            echo "ERROR: input.sp missing"
             exit 1
           fi
-          echo "input.sp OK"
 
-      # -----------------------------------------------------
-      # Build compiler
-      # -----------------------------------------------------
       - name: Cargo Build
         run: cargo build --release --verbose
 
       - name: Prepare build directory
         run: mkdir -p build
 
-      # -----------------------------------------------------
-      # RLKC call (OS-specific)
-      # -----------------------------------------------------
-      - name: Generate ASM via rlkc (Linux/macOS)
+      # Linux/macOS use ELF/Mach-O rlkc
+      - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: ./target/release/rlkc > build/out.asm
 
-      - name: Generate ASM via rlkc (Windows)
+      # Windows rlkc.exe
+      - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\target\release\rlkc.exe > build/out.asm
 
-      # -----------------------------------------------------
-      # ASM Debug
-      # -----------------------------------------------------
       - name: Show ASM
         shell: bash
         run: |
-          echo "============= BUILD/OUT.ASM ============="
-          cat build/out.asm
-          echo "========================================="
+          echo "=========== ASM =========="
+          cat build/out.asm || true
+          echo "=========================="
 
-      # -----------------------------------------------------
-      # LINUX
-      # -----------------------------------------------------
-      - name: Build for Linux
+      # ------------------------------------------
+      # LINUX BUILD
+      # ------------------------------------------
+      - name: Build Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -108,10 +91,10 @@ jobs:
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/out
 
-      # -----------------------------------------------------
-      # MACOS
-      # -----------------------------------------------------
-      - name: Build for macOS
+      # ------------------------------------------
+      # MACOS BUILD
+      # ------------------------------------------
+      - name: Build macOS
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -119,20 +102,20 @@ jobs:
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
           ld -macosx_version_min 11.0 \
-             -syslibroot $SDK \
-             -lSystem \
-             -e _main \
-             build/out_x86.o \
-             -o build/out
+            -syslibroot $SDK \
+            -lSystem \
+            -e _main \
+            build/out_x86.o \
+            -o build/out
 
-      # -----------------------------------------------------
-      # WINDOWS (FULL FIX)
-      # -----------------------------------------------------
+      # ------------------------------------------
+      # WINDOWS BUILD — FIXED
+      # ------------------------------------------
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
 
-      - name: Build for Windows (full fix)
+      - name: Build Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -144,22 +127,22 @@ jobs:
             $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          # Win64 NASM uses pure 'main' (NO underscore!)
+          # Win64 NASM 엔트리는 main
           cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
 
-      # -----------------------------------------------------
-      # ASM dump artifact (Windows ONLY)
-      # -----------------------------------------------------
+      # ------------------------------------------
+      # Upload ASM (Windows only)
+      # ------------------------------------------
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: asm-windows
           path: build/out.asm
 
-      # -----------------------------------------------------
-      # META creation
-      # -----------------------------------------------------
-      - name: Generate META.json
+      # ------------------------------------------
+      # META JSON
+      # ------------------------------------------
+      - name: Create META.json
         shell: bash
         run: |
           mkdir -p build/meta
@@ -170,17 +153,14 @@ jobs:
             \"compiled_at\": \"$(date)\"
           }" > build/meta/meta.json
 
-      # -----------------------------------------------------
-      # Upload final artifacts
-      # -----------------------------------------------------
+      # ------------------------------------------
+      # Upload Final Artifacts
+      # ------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
           name: spongelang-${{ matrix.os }}
           path: build/*
 
-# ---------------------------------------------------------
-# RELEASE JOB
-# ---------------------------------------------------------
   release:
     needs: [ auto-tag, build ]
     runs-on: ubuntu-latest
@@ -190,14 +170,14 @@ jobs:
         with:
           path: release-temp
 
-      - name: Organize Release Files
+      - name: Organize release
         run: |
           mkdir -p release/linux release/macos release/windows
           cp -r release-temp/spongelang-ubuntu-latest/* release/linux/ || true
           cp -r release-temp/spongelang-macos-latest/* release/macos/ || true
           cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
 
-      - name: Make ZIP Packages
+      - name: Make ZIPs
         run: |
           cd release
           zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
@@ -208,14 +188,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang AUTO 3OS — ${{ needs.auto-tag.outputs.tag }}"
+          name: "SpongeLang 3OS AUTO — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            ## SpongeLang Full Auto Release (v4.11.2)
-            - Windows LNK 오류 완전 해결
-            - ASM 디버그 자동 업로드
-            - RLKC → ASM → NASM → MSVC 완전자동
-            - META JSON 자동 생성 (OS/Tag/SHA/Time)
-            - 3OS ZIP 패키지 생성
+            자동 릴리즈 완료
+            - 3OS 빌드
+            - Windows ENTRY 패치
+            - ASM 자동 업로드
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
