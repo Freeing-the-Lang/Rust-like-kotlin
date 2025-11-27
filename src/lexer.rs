@@ -40,6 +40,25 @@ pub enum Token {
     EOF,
 }
 
+// ===========================
+// keyword / type lookup table
+// ===========================
+fn lookup_keyword(word: &str) -> Token {
+    match word.to_lowercase().as_str() {
+        "func"   => Token::Func,
+        "let"    => Token::Let,
+        "return" => Token::Return,
+        "if"     => Token::If,
+        "else"   => Token::Else,
+
+        // types
+        "int"    => Token::IntType,
+        "string" => Token::StringType,
+
+        _ => Token::Ident(word.to_string()),
+    }
+}
+
 pub fn lex(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
@@ -47,7 +66,9 @@ pub fn lex(input: &str) -> Vec<Token> {
     while let Some(&c) = chars.peek() {
         match c {
             // whitespace
-            ' ' | '\n' | '\t' | '\r' => { chars.next(); }
+            ' ' | '\n' | '\t' | '\r' => {
+                chars.next();
+            }
 
             // punctuation
             '(' => { chars.next(); tokens.push(Token::LParen); }
@@ -94,21 +115,20 @@ pub fn lex(input: &str) -> Vec<Token> {
                     if ch == '"' {
                         chars.next();
                         break;
-                    } else {
-                        s.push(ch);
-                        chars.next();
                     }
+                    s.push(ch);
+                    chars.next();
                 }
 
                 tokens.push(Token::StringLiteral(s));
             }
 
             // numbers
-            c if c.is_ascii_digit() => {
+            d if d.is_ascii_digit() => {
                 let mut num = String::new();
-                while let Some(&d) = chars.peek() {
-                    if d.is_ascii_digit() {
-                        num.push(d);
+                while let Some(&n) = chars.peek() {
+                    if n.is_ascii_digit() {
+                        num.push(n);
                         chars.next();
                     } else {
                         break;
@@ -117,8 +137,8 @@ pub fn lex(input: &str) -> Vec<Token> {
                 tokens.push(Token::Number(num.parse().unwrap()));
             }
 
-            // identifiers (func, let, return, types…)
-            c if c.is_ascii_alphabetic() => {
+            // identifiers / keywords / types
+            alpha if alpha.is_ascii_alphabetic() => {
                 let mut id = String::new();
                 while let Some(&d) = chars.peek() {
                     if d.is_ascii_alphanumeric() || d == '_' {
@@ -129,20 +149,12 @@ pub fn lex(input: &str) -> Vec<Token> {
                     }
                 }
 
-                match id.as_str() {
-                    "func" => tokens.push(Token::Func),
-                    "let" => tokens.push(Token::Let),
-                    "return" => tokens.push(Token::Return),
-                    "if" => tokens.push(Token::If),
-                    "else" => tokens.push(Token::Else),
-                    "int" => tokens.push(Token::IntType),
-                    "string" => tokens.push(Token::StringType),
-                    _ => tokens.push(Token::Ident(id)),
-                }
+                tokens.push(lookup_keyword(&id));
             }
 
+            // unknown / skip
             _ => {
-                chars.next(); // skip unknown char
+                chars.next();
             }
         }
     }
