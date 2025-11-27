@@ -33,7 +33,6 @@ jobs:
           git tag ${{ steps.tag-step.outputs.tag }}
           git push origin ${{ steps.tag-step.outputs.tag }}
 
-
 # ---------------------------------------------------------
 # BUILD JOB (3 OS)
 # ---------------------------------------------------------
@@ -49,9 +48,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Build rlkc (SpongeLang compiler)
+      # Build SpongeLang Compiler
       - name: Cargo Build
-        run: cargo build --release
+        run: cargo build --release --verbose
 
       - name: Prepare build
         run: mkdir -p build
@@ -62,10 +61,9 @@ jobs:
         run: |
           ./target/release/rlkc > build/out.asm
 
-
-      # ================
+      # -----------------------------------------------------
       #   L I N U X
-      # ================
+      # -----------------------------------------------------
       - name: Build for Linux
         if: matrix.os == 'ubuntu-latest'
         shell: bash
@@ -75,10 +73,9 @@ jobs:
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/out
 
-
-      # ================
+      # -----------------------------------------------------
       #   M A C O S
-      # ================
+      # -----------------------------------------------------
       - name: Build for macOS
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -87,46 +84,55 @@ jobs:
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
 
-          # ld needs explicit platform flags
+          # ld 안정화: 반드시 _main 지정
           ld -macosx_version_min 11.0 \
-             -lSystem \
              -syslibroot $SDK \
+             -lSystem \
+             -e _main \
              build/out_x86.o \
              -o build/out
 
-
-      # ================
-      #  W I N D O W S
-      # ================
+      # -----------------------------------------------------
+      #   W I N D O W S
+      # -----------------------------------------------------
       - name: Install NASM on Windows
         if: matrix.os == 'windows-latest'
         run: choco install nasm -y
 
-      - name: Build for Windows (MSVC link)
+      - name: Build for Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
+          # PATH 안정성 보강
+          $env:Path += ";C:\Program Files\NASM"
+
           nasm -f win64 build/out.asm -o build/out.obj
 
-          # Find MSVC vcvars64.bat
+          # Find vcvars64
           $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
           if (!(Test-Path $vcvars)) {
             $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          # MSVC link
-          cmd.exe /c "`"$vcvars`" && link.exe /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
-
+          # MSVC link (엔트리 안정화)
+          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj /OUT:build/out.exe"
 
       # -----------------------------------------------------
-      # META ADD
+      # META PACK
       # -----------------------------------------------------
       - name: Add META Pack
         shell: bash
         run: |
           mkdir -p build/meta
-          echo "{ \"meta\": \"sponge-meta\" }" > build/meta/meta.json
-
+          cat <<EOF > build/meta/meta.json
+{
+  "meta": "sponge-meta",
+  "timestamp": "${{ needs.auto-tag.outputs.tag }}",
+  "os": "${{ matrix.os }}",
+  "compiler": "rlkc",
+  "pipeline": "ASM → NASM → LINK"
+}
+EOF
 
       # -----------------------------------------------------
       # UPLOAD BY OS
@@ -135,7 +141,6 @@ jobs:
         with:
           name: spongelang-${{ matrix.os }}
           path: build/*
-
 
 # ---------------------------------------------------------
 # RELEASE
@@ -161,9 +166,9 @@ jobs:
       - name: Make ZIPs
         run: |
           cd release
-          zip -r linux.zip linux
-          zip -r macos.zip macos
-          zip -r windows.zip windows
+          zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
+          zip -r macos-${{ needs.auto-tag.outputs.tag }}.zip macos
+          zip -r windows-${{ needs.auto-tag.outputs.tag }}.zip windows
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -175,12 +180,12 @@ jobs:
 
             포함:
             - Linux / macOS / Windows 실행파일
-            - 자동 META Pack
+            - 확장 META Pack (OS/타임스탬프/파이프라인 정보)
             - 완전 자동 태그
-            - NASM 기반 ASM 파이프라인
-            - Windows MSVC link 완전 성공 버전
-            - macOS _main 문제 완전 해결
-            - Linux ELF 정상 생성
+            - NASM ASM 파이프라인
+            - macOS _main 완전 고정
+            - Windows MSVC 링크 안정화
+            - Linux ELF 정상 빌드
 
           files: release/*.zip
 
