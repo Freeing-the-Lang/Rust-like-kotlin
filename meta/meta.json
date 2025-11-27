@@ -1,0 +1,9 @@
+{
+  "meta": "sponge-meta",
+  "description": "SpongeLang Build Metadata",
+  "pipeline": "ASM → NASM → LINK",
+  "compiler": "rlkc",
+  "os": "auto-detect-per-job",
+  "timestamp": "auto-from-github-tag",
+  "generated_by": "GitHub Actions FULL AUTO Pipeline"
+}
