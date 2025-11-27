@@ -36,23 +36,32 @@ pub struct IRProgram {
 }
 
 pub struct SemanticAnalyzer {
-    functions: HashMap<String, Function>,
+    // 함수 목록을 HashMap이 아닌 **Vec** 으로 유지 — 순서 안정적
+    functions: Vec<Function>,
+
+    // 이름 기반 참조용 (타입 체크, 존재 여부 검사)
+    map: HashMap<String, Function>,
 }
 
 impl SemanticAnalyzer {
     pub fn new(program: Program) -> Self {
-        let mut functions = HashMap::new();
+        let mut map = HashMap::new();
         for f in &program.funcs {
-            functions.insert(f.name.clone(), f.clone());
+            map.insert(f.name.clone(), f.clone());
         }
 
-        Self { functions }
+        // *** 여기! HashMap 아니라 Vec 으로 보관 ***
+        Self {
+            functions: program.funcs, // 순서 그대로 유지
+            map,
+        }
     }
 
     pub fn analyze(&self) -> IRProgram {
         let mut funcs = Vec::new();
 
-        for (_, f) in &self.functions {
+        // *** 여기! 순서 안정적, main 절대 사라지지 않음 ***
+        for f in &self.functions {
             funcs.push(self.analyze_function(f));
         }
 
@@ -62,7 +71,6 @@ impl SemanticAnalyzer {
     fn analyze_function(&self, f: &Function) -> IRFunction {
         let mut scope: HashMap<String, TypeName> = HashMap::new();
 
-        // Add params to local scope
         for (pname, ptype) in &f.params {
             scope.insert(pname.clone(), ptype.clone());
         }
@@ -88,11 +96,9 @@ impl SemanticAnalyzer {
         scope: &mut HashMap<String, TypeName>,
         expected_ret: &TypeName,
     ) -> Vec<IR> {
+
         match stmt {
             Stmt::Let(name, t, expr) => {
-                let e = self.analyze_expr(expr, scope);
-
-                // type checking
                 let et = self.expr_type(expr, scope);
 
                 if &et != t {
@@ -102,6 +108,7 @@ impl SemanticAnalyzer {
                     );
                 }
 
+                let e = self.analyze_expr(expr, scope);
                 scope.insert(name.clone(), t.clone());
 
                 vec![IR::StoreVar(name.clone(), e)]
@@ -109,7 +116,6 @@ impl SemanticAnalyzer {
 
             Stmt::Return(expr) => {
                 let et = self.expr_type(expr, scope);
-
                 if &et != expected_ret {
                     panic!(
                         "Return type mismatch: expected {:?} but got {:?}",
@@ -127,7 +133,6 @@ impl SemanticAnalyzer {
             }
 
             Stmt::If(cond, then_body, else_body) => {
-                // cond must be int
                 let ct = self.expr_type(cond, scope);
                 if ct != TypeName::Int {
                     panic!("If condition must be int, got {:?}", ct);
@@ -165,38 +170,36 @@ impl SemanticAnalyzer {
             }
 
             Expr::Call(name, args) => {
-                if !self.functions.contains_key(name) {
+                if !self.map.contains_key(name) {
                     panic!("Unknown function '{}'", name);
                 }
 
-                let func = self.functions.get(name).unwrap();
+                let func = self.map.get(name).unwrap();
 
                 if func.params.len() != args.len() {
                     panic!(
-                        "Argument count mismatch in call {}: expected {}, got {}",
-                        name,
+                        "Argument count mismatch: expected {}, got {}",
                         func.params.len(),
                         args.len()
                     );
                 }
 
-                // type check args
-                for (i, arg_expr) in args.iter().enumerate() {
-                    let arg_t = self.expr_type(arg_expr, scope);
+                for (i, expr) in args.iter().enumerate() {
+                    let arg_t = self.expr_type(expr, scope);
                     let param_t = &func.params[i].1;
 
-                    if &arg_t != param_t {
+                    if arg_t != *param_t {
                         panic!(
-                            "Type mismatch in argument {} of function {}: expected {:?}, got {:?}",
+                            "Type mismatch for argument {} in {}: expected {:?}, got {:?}",
                             i, name, param_t, arg_t
                         );
                     }
                 }
 
-                let mut ir_args = Vec::new();
-                for arg in args {
-                    ir_args.push(self.analyze_expr(arg, scope));
-                }
+                let ir_args = args
+                    .iter()
+                    .map(|a| self.analyze_expr(a, scope))
+                    .collect();
 
                 IRExpr::Call(name.clone(), ir_args)
             }
@@ -205,12 +208,13 @@ impl SemanticAnalyzer {
 
     fn expr_type(&self, expr: &Expr, scope: &HashMap<String, TypeName>) -> TypeName {
         match expr {
+
             Expr::Number(_) => TypeName::Int,
             Expr::StringLiteral(_) => TypeName::String,
 
             Expr::Var(name) => scope
                 .get(name)
-                .unwrap_or_else(|| panic!("Unknown variable: {}", name))
+                .unwrap_or_else(|| panic!("Unknown variable '{}'", name))
                 .clone(),
 
             Expr::Binary(a, op, b) => {
@@ -221,7 +225,6 @@ impl SemanticAnalyzer {
                     return TypeName::String;
                 }
 
-                // all other operators expect int
                 if lt != TypeName::Int || rt != TypeName::Int {
                     panic!("Operator '{}' requires int operands", op);
                 }
@@ -231,11 +234,11 @@ impl SemanticAnalyzer {
 
             Expr::Call(name, _) => {
                 let func = self
-                    .functions
+                    .map
                     .get(name)
-                    .unwrap_or_else(|| panic!("Function not found: {}", name));
+                    .unwrap_or_else(|| panic!("Unknown function '{}'", name));
                 func.ret_type.clone()
             }
         }
     }
-                      }
+}
