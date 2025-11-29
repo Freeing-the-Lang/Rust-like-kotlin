@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO 3OS + ASM + META + RELEASE (Windows Fix)"
+name: "SpongeLang — FULL AUTO 3OS + ASM + META + SHA256 + Windows Fix"
 
 on:
   push:
@@ -46,6 +46,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ------------------------------------------
+      # Cargo Cache (massive speed-up)
+      # ------------------------------------------
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Check input.sp
         shell: bash
         run: |
@@ -58,21 +69,23 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Prepare build directory
-        run: mkdir -p build
+        run: mkdir -p build/meta
 
-      # Linux/macOS use ELF/Mach-O rlkc
+      # ------------------------------------------
+      # Generate ASM
+      # ------------------------------------------
       - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: ./target/release/rlkc > build/out.asm
 
-      # Windows rlkc.exe
       - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\target\release\rlkc.exe > build/out.asm
 
       - name: Show ASM
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           echo "=========== ASM =========="
@@ -80,7 +93,7 @@ jobs:
           echo "=========================="
 
       # ------------------------------------------
-      # LINUX BUILD
+      # Linux Build
       # ------------------------------------------
       - name: Build Linux
         if: runner.os == 'Linux'
@@ -92,7 +105,7 @@ jobs:
           ld build/out.o -o build/out
 
       # ------------------------------------------
-      # MACOS BUILD
+      # macOS Build
       # ------------------------------------------
       - name: Build macOS
         if: runner.os == 'macOS'
@@ -109,7 +122,7 @@ jobs:
             -o build/out
 
       # ------------------------------------------
-      # WINDOWS BUILD — FIXED
+      # Windows Build — Enhanced
       # ------------------------------------------
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
@@ -119,24 +132,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:Path += ";C:\Program Files\NASM"
+          $env:Path = "$env:Path;C:\Program Files\NASM"
+
           nasm -f win64 build/out.asm -o build/out.obj
 
-          $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-          if (!(Test-Path $vcvars)) {
-            $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          }
+          # vcvars64.bat 자동 탐색 강화
+          $vcPaths = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+          )
+          $vcvars = $vcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $vcvars) { Write-Error "vcvars64.bat not found"; exit 1 }
 
-          # Win64 NASM 엔트리는 main
+          # NASM Win64 엔트리는 main
           cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
 
       # ------------------------------------------
-      # Upload ASM (Windows only)
+      # Upload All ASM (Every OS)
       # ------------------------------------------
       - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
         with:
-          name: asm-windows
+          name: asm-${{ matrix.os }}
           path: build/out.asm
 
       # ------------------------------------------
@@ -145,12 +162,14 @@ jobs:
       - name: Create META.json
         shell: bash
         run: |
-          mkdir -p build/meta
           echo "{
+            \"project\": \"SpongeLang\",
             \"os\": \"${{ matrix.os }}\",
+            \"runner_os\": \"${{ runner.os }}\",
             \"tag\": \"${{ needs.auto-tag.outputs.tag }}\",
             \"sha\": \"${GITHUB_SHA}\",
-            \"compiled_at\": \"$(date)\"
+            \"compiled_at\": \"$(date)\",
+            \"hostname\": \"$(hostname)\"
           }" > build/meta/meta.json
 
       # ------------------------------------------
@@ -170,19 +189,25 @@ jobs:
         with:
           path: release-temp
 
-      - name: Organize release
+      - name: Organize release structure
         run: |
-          mkdir -p release/linux release/macos release/windows
-          cp -r release-temp/spongelang-ubuntu-latest/* release/linux/ || true
-          cp -r release-temp/spongelang-macos-latest/* release/macos/ || true
-          cp -r release-temp/spongelang-windows-latest/* release/windows/ || true
+          mkdir -p release/linux/spongelang-linux \
+                   release/macos/spongelang-macos \
+                   release/windows/spongelang-windows
+
+          cp -r release-temp/spongelang-ubuntu-latest/* release/linux/spongelang-linux/ || true
+          cp -r release-temp/spongelang-macos-latest/* release/macos/spongelang-macos/ || true
+          cp -r release-temp/spongelang-windows-latest/* release/windows/spongelang-windows/ || true
 
       - name: Make ZIPs
         run: |
           cd release
+
           zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
           zip -r macos-${{ needs.auto-tag.outputs.tag }}.zip macos
           zip -r windows-${{ needs.auto-tag.outputs.tag }}.zip windows
+
+          sha256sum *.zip > checksums.sha256
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -191,10 +216,16 @@ jobs:
           name: "SpongeLang 3OS AUTO — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             자동 릴리즈 완료
+
             - 3OS 빌드
-            - Windows ENTRY 패치
-            - ASM 자동 업로드
+            - Windows VC 자동탐색 강화
+            - META.json 확장
+            - ASM 3OS 업로드
+            - SHA256 체크섬 포함
+
+            **checksums:**
+            ```
+            $(cat release/checksums.sha256)
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
