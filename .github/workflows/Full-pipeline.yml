@@ -1,4 +1,4 @@
-name: "Rust-like-kotlin — FULL AUTO 3OS + ASM + AUTO-ENTRY + RELEASE"
+name: "Rust-like-kotlin — FULL AUTO 3OS BUILD + PRINTLN + RELEASE"
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: rlk-kotlin-${{ github.ref }}
+  group: rust-like-kotlin-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -46,53 +46,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cargo Cache
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      # Ensure input.rlk exists
-      - name: Ensure input.rlk
+      # =====================================================
+      # CHECK INPUT FILE
+      # =====================================================
+      - name: Check input.rlk
         shell: bash
         run: |
           if [ ! -f input.rlk ]; then
-            echo 'func main() { println("Hello from Rust-like-kotlin") }' > input.rlk
-            echo "Created default input.rlk"
+            echo "ERROR: input.rlk missing"
+            exit 1
           fi
 
-      - name: Cargo Build (Compiler)
+      # =====================================================
+      # BUILD COMPILER
+      # =====================================================
+      - name: Cargo Build
         run: cargo build --release --verbose
 
-      - name: Prepare ./build
-        run: mkdir -p build/meta
+      - name: Prepare build directory
+        run: mkdir -p build
 
-      # Detect compiler binary (rlkc / rlkc.exe)
-      - name: Detect compiler binary
-        shell: bash
-        run: |
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            echo "RLKC=rlkc.exe" >> $GITHUB_ENV
-          else
-            echo "RLKC=rlkc" >> $GITHUB_ENV
-          fi
-
-      # Generate ASM (Linux/macOS)
+      # =====================================================
+      # GENERATE ASM
+      # =====================================================
       - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: ./target/release/${RLKC} > build/out.asm
+        run: ./target/release/rlkc > build/out.asm
 
-      # Generate ASM (Windows)
       - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\target\release\rlkc.exe > build/out.asm
 
-      # Show ASM
       - name: Show ASM
         shell: bash
         run: |
@@ -100,38 +86,37 @@ jobs:
           cat build/out.asm || true
           echo "=========================="
 
-      ###########################################
-      # LINUX BUILD
-      ###########################################
+      # =====================================================
+      # LINUX BUILD  (IMPORTANT: GCC LINK)
+      # =====================================================
       - name: Build Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm
+          sudo apt-get install -y nasm gcc
           nasm -felf64 build/out.asm -o build/out.o
-          ld build/out.o -o build/out
+          gcc build/out.o -o build/out     # ★ Linux must use GCC
 
-      ###########################################
-      # MACOS BUILD
-      ###########################################
+      # =====================================================
+      # macOS BUILD (uses _printf)
+      # =====================================================
       - name: Build macOS
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          brew install nasm
+          brew install -q nasm
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
-          ld -macosx_version_min 11.0 \
+          ld -macos_version_min 11.0 \
              -syslibroot $SDK \
              -lSystem \
-             -e _main \
              build/out_x86.o \
              -o build/out
 
-      ###########################################
-      # WINDOWS BUILD — AUTO ENTRY DETECTION
-      ###########################################
+      # =====================================================
+      # WINDOWS BUILD (MSVC + printf)
+      # =====================================================
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
@@ -140,124 +125,55 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:Path = "$env:Path;C:\Program Files\NASM"
-
+          $env:Path += ";C:\Program Files\NASM"
           nasm -f win64 build/out.asm -o build/out.obj
 
-          # AUTO-ENTRY DETECTION
-          $asm = Get-Content build/out.asm
-          $candidates = @("main", "_main", "kotlin_main", "start", "_start", "entry", "_entry", "main_func")
-          $entry = $null
-
-          foreach ($c in $candidates) {
-            if ($asm -match ("^\s*" + [regex]::Escape($c) + ":")) {
-              $entry = $c
-              break
-            }
+          $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+          if (!(Test-Path $vcvars)) {
+            $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           }
 
-          if (-not $entry) {
-            Write-Error "No entry symbol found! Checked: $candidates"
-            exit 1
-          }
+          cmd.exe /c "`"$vcvars`" && link.exe build/out.obj /OUT:build/out.exe /SUBSYSTEM:CONSOLE"
 
-          Write-Host "Detected ENTRY: $entry"
-
-          # Find vcvars64
-          $vcPaths = @(
-            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
-            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
-            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-          )
-          $vcvars = $vcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-          if (-not $vcvars) {
-            Write-Error "vcvars64.bat NOT FOUND"
-            exit 1
-          }
-
-          # LINK
-          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:$entry /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
-
-      ###########################################
-      # Upload ASM (All OS)
-      ###########################################
+      # Upload platform artifacts
       - uses: actions/upload-artifact@v4
         with:
-          name: asm-${{ matrix.os }}
-          path: build/out.asm
-
-      ###########################################
-      # META.json
-      ###########################################
-      - name: Create META.json
-        shell: bash
-        run: |
-          echo "{
-            \"project\": \"Rust-like-kotlin\",
-            \"os\": \"${{ matrix.os }}\",
-            \"runner_os\": \"${{ runner.os }}\",
-            \"tag\": \"${{ needs.auto-tag.outputs.tag }}\",
-            \"sha\": \"${GITHUB_SHA}\",
-            \"compiled_at\": \"$(date)\",
-            \"hostname\": \"$(hostname)\"
-          }" > build/meta/meta.json
-
-      ###########################################
-      # Upload Final Artifacts
-      ###########################################
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rlk-kotlin-${{ matrix.os }}
+          name: rust-like-kotlin-${{ matrix.os }}
           path: build/*
 
-  ########################################################
-  # RELEASE JOB
-  ########################################################
   release:
     needs: [ auto-tag, build ]
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: release-temp
 
-      - name: Organize Release Directories
+      - name: Organize release
         run: |
-          mkdir -p release/linux/rlk-linux \
-                   release/macos/rlk-macos \
-                   release/windows/rlk-windows
+          mkdir -p release/linux release/macos release/windows
+          cp -r release-temp/rust-like-kotlin-ubuntu-latest/* release/linux/ || true
+          cp -r release-temp/rust-like-kotlin-macos-latest/* release/macos/ || true
+          cp -r release-temp/rust-like-kotlin-windows-latest/* release/windows/ || true
 
-          cp -r release-temp/rlk-kotlin-ubuntu-latest/* release/linux/rlk-linux/ || true
-          cp -r release-temp/rlk-kotlin-macos-latest/* release/macos/rlk-macos/ || true
-          cp -r release-temp/rlk-kotlin-windows-latest/* release/windows/rlk-windows/ || true
-
-      - name: Make ZIPs + SHA256
+      - name: Make ZIPs
         run: |
           cd release
           zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
           zip -r macos-${{ needs.auto-tag.outputs.tag }}.zip macos
           zip -r windows-${{ needs.auto-tag.outputs.tag }}.zip windows
-          sha256sum *.zip > checksums.sha256
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "Rust-like-kotlin — 3OS AUTO RELEASE — ${{ needs.auto-tag.outputs.tag }}"
+          name: "Rust-like-kotlin — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            Rust-like-kotlin 자동 빌드 + 자동 릴리즈 완료.
-
+            Rust-like-kotlin 자동 릴리즈 완료
             - 3OS 빌드
-            - Windows ENTRY 자동 감지 (main / _main / kotlin_main 등)
-            - META.json 포함
-            - ASM 자동 업로드
-            - SHA256 체크섬 포함
-
-            checksums:
-            ```
-            $(cat release/checksums.sha256)
-            ```
+            - println 지원 (printf 기반)
+            - macOS _printf fix
+            - Windows/MSVC 정상작동
+            - Linux gcc link fix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
