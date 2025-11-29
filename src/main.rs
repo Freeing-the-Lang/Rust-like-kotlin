@@ -3,27 +3,21 @@ mod parser;
 mod semantic;
 mod codegen;
 
-use lexer::lex;
-use parser::Parser;
-use semantic::SemanticAnalyzer;
-use codegen::Codegen;
-
 use std::fs;
 
 fn main() {
-    let input = fs::read_to_string("input.rlk")
-        .expect("Failed to read input.sp");
+    let source = fs::read_to_string("input.rlk")
+        .expect("input.rlk missing");
 
-    let tokens = lex(&input);
+    let tokens = lexer::lex(&source);
+    let mut parser = parser::Parser::new(tokens);
+    let ast = parser.parse_program();
 
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program();
+    let semantic = semantic::SemanticAnalyzer::new(ast);
+    let ir = semantic.analyze();
 
-    let sem = SemanticAnalyzer::new(program);
-    let ir  = sem.analyze();
-
-    let cg  = Codegen;          // 여기! new() 필요 없음
-    let asm = cg.generate(&ir); // 그대로 호출 가능
+    let codegen = codegen::Codegen;
+    let asm = codegen.generate(&ir);
 
     println!("{}", asm);
 }
