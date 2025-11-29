@@ -5,7 +5,6 @@ pub struct Codegen;
 
 #[cfg(target_os = "windows")]
 const ENTRY: &str = "main";
-
 #[cfg(not(target_os = "windows"))]
 const ENTRY: &str = "_main";
 
@@ -14,10 +13,14 @@ impl Codegen {
         let mut out = String::new();
 
         // -------------------------
-        // .data (문자열 리터럴)
+        // 데이터 영역
         // -------------------------
         writeln!(&mut out, "section .data").unwrap();
 
+        // 문자열 출력용 format
+        writeln!(&mut out, "fmt_str: db \"%s\", 0").unwrap();
+
+        // 문자열 리터럴 수집
         let mut strs = Vec::new();
         for f in &ir.funcs {
             for stmt in &f.body {
@@ -27,24 +30,29 @@ impl Codegen {
 
         for (i, s) in strs.iter().enumerate() {
             writeln!(&mut out, "str_{}: db \"{}\", 0", i, s).unwrap();
-            writeln!(&mut out, "str_{}_len: equ $ - str_{}", i, i).unwrap();
         }
 
         // -------------------------
-        // .text
+        // TEXT 영역
         // -------------------------
         writeln!(&mut out, "section .text").unwrap();
         writeln!(&mut out, "global {}", ENTRY).unwrap();
 
+        // CRT printf 사용
+        writeln!(&mut out, "extern printf").unwrap();
+
+        // every function
         for f in &ir.funcs {
             writeln!(&mut out, "global {}_func", f.name).unwrap();
             writeln!(&mut out, "global {}_func_end", f.name).unwrap();
         }
 
+        // 함수 본문 생성
         for f in &ir.funcs {
             self.gen_function(&mut out, f, &strs);
         }
 
+        // ENTRY (main wrapper)
         writeln!(&mut out, "{}:", ENTRY).unwrap();
         writeln!(&mut out, "    call main_func").unwrap();
         writeln!(&mut out, "    ret").unwrap();
@@ -53,9 +61,8 @@ impl Codegen {
     }
 
     fn collect_str(&self, stmt: &IR, out: &mut Vec<String>) {
-        match stmt {
-            IR::Println(IRExpr::Str(s)) => out.push(s.clone()),
-            _ => {}
+        if let IR::Println(IRExpr::Str(s)) = stmt {
+            out.push(s.clone());
         }
     }
 
@@ -95,50 +102,25 @@ impl Codegen {
                 let idx = strs.iter().position(|x| x == s).unwrap();
                 writeln!(out, "    lea rax, [rel str_{}]", idx).unwrap();
             }
-
             _ => {}
         }
     }
 
     // ------------------------------------------------------------
-    // ★ println 구현 (Windows / Linux / macOS)
+    // ★ printf 기반 println
     // ------------------------------------------------------------
     fn gen_print(&self, out: &mut String, expr: &IRExpr, strs: &Vec<String>) {
         let idx = if let IRExpr::Str(s) = expr {
             strs.iter().position(|x| x == s).unwrap()
         } else {
-            panic!("println only supports string literal");
+            panic!("println only supports string literal")
         };
 
-        #[cfg(target_os = "windows")]
-        {
-            writeln!(out, "    sub rsp, 32").unwrap();
-            writeln!(out, "    mov rcx, -11").unwrap();
-            writeln!(out, "    call GetStdHandle").unwrap();
-            writeln!(out, "    mov rcx, rax").unwrap();
-            writeln!(out, "    lea rdx, [rel str_{}]", idx).unwrap();
-            writeln!(out, "    mov r8, str_{}_len", idx).unwrap();
-            writeln!(out, "    xor r9d, r9d").unwrap();
-            writeln!(out, "    call WriteConsoleA").unwrap();
-            writeln!(out, "    add rsp, 32").unwrap();
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            writeln!(out, "    mov rax, 1").unwrap();
-            writeln!(out, "    mov rdi, 1").unwrap();
-            writeln!(out, "    lea rsi, [rel str_{}]", idx).unwrap();
-            writeln!(out, "    mov rdx, str_{}_len", idx).unwrap();
-            writeln!(out, "    syscall").unwrap();
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            writeln!(out, "    mov rax, 0x2000004").unwrap();
-            writeln!(out, "    mov rdi, 1").unwrap();
-            writeln!(out, "    lea rsi, [rel str_{}]", idx).unwrap();
-            writeln!(out, "    mov rdx, str_{}_len", idx).unwrap();
-            writeln!(out, "    syscall").unwrap();
-        }
+        // 호출 규약: Windows/Linux/macOS 모두 printf는 C ABI 사용
+        writeln!(out, "    lea rcx, [rel fmt_str]").unwrap();    // format
+        writeln!(out, "    lea rdx, [rel str_{}]", idx).unwrap(); // argument
+        writeln!(out, "    sub rsp, 32").unwrap();                // shadow space (Windows)
+        writeln!(out, "    call printf").unwrap();
+        writeln!(out, "    add rsp, 32").unwrap();
     }
 }
