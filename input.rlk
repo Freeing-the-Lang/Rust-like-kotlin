@@ -1,3 +1,4 @@
-func main() {
-    println("Hello from Rust-like-kotlin")
+func main() : Int {
+    println("Hello from Rust-like-kotlin");
+    return 0;
 }
