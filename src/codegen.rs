@@ -5,6 +5,7 @@ pub struct Codegen;
 
 #[cfg(target_os = "windows")]
 const ENTRY: &str = "main";
+
 #[cfg(not(target_os = "windows"))]
 const ENTRY: &str = "_main";
 
@@ -12,15 +13,15 @@ impl Codegen {
     pub fn generate(&self, ir: &IRProgram) -> String {
         let mut out = String::new();
 
-        // -------------------------
-        // 데이터 영역
-        // -------------------------
+        // ===============================
+        // DATA SECTION
+        // ===============================
         writeln!(&mut out, "section .data").unwrap();
 
-        // 문자열 출력용 format
+        // printf format
         writeln!(&mut out, "fmt_str: db \"%s\", 0").unwrap();
 
-        // 문자열 리터럴 수집
+        // Collect string literals
         let mut strs = Vec::new();
         for f in &ir.funcs {
             for stmt in &f.body {
@@ -32,27 +33,31 @@ impl Codegen {
             writeln!(&mut out, "str_{}: db \"{}\", 0", i, s).unwrap();
         }
 
-        // -------------------------
-        // TEXT 영역
-        // -------------------------
+        // ===============================
+        // TEXT SECTION
+        // ===============================
         writeln!(&mut out, "section .text").unwrap();
         writeln!(&mut out, "global {}", ENTRY).unwrap();
 
-        // CRT printf 사용
+        // OS별 extern printf
+        #[cfg(target_os = "macos")]
+        writeln!(&mut out, "extern _printf").unwrap();
+
+        #[cfg(not(target_os = "macos"))]
         writeln!(&mut out, "extern printf").unwrap();
 
-        // every function
+        // export all functions
         for f in &ir.funcs {
             writeln!(&mut out, "global {}_func", f.name).unwrap();
             writeln!(&mut out, "global {}_func_end", f.name).unwrap();
         }
 
-        // 함수 본문 생성
+        // functions
         for f in &ir.funcs {
             self.gen_function(&mut out, f, &strs);
         }
 
-        // ENTRY (main wrapper)
+        // ENTRY → call main_func
         writeln!(&mut out, "{}:", ENTRY).unwrap();
         writeln!(&mut out, "    call main_func").unwrap();
         writeln!(&mut out, "    ret").unwrap();
@@ -68,11 +73,9 @@ impl Codegen {
 
     fn gen_function(&self, out: &mut String, f: &IRFunction, strs: &Vec<String>) {
         writeln!(out, "{}_func:", f.name).unwrap();
-
         for stmt in &f.body {
             self.gen_stmt(out, stmt, strs);
         }
-
         writeln!(out, "{}_func_end:", f.name).unwrap();
         writeln!(out, "    ret").unwrap();
     }
@@ -102,13 +105,14 @@ impl Codegen {
                 let idx = strs.iter().position(|x| x == s).unwrap();
                 writeln!(out, "    lea rax, [rel str_{}]", idx).unwrap();
             }
+
             _ => {}
         }
     }
 
-    // ------------------------------------------------------------
-    // ★ printf 기반 println
-    // ------------------------------------------------------------
+    // ========================================
+    // PRINTLN (printf 기반 — 3OS 완벽 지원)
+    // ========================================
     fn gen_print(&self, out: &mut String, expr: &IRExpr, strs: &Vec<String>) {
         let idx = if let IRExpr::Str(s) = expr {
             strs.iter().position(|x| x == s).unwrap()
@@ -116,11 +120,31 @@ impl Codegen {
             panic!("println only supports string literal")
         };
 
-        // 호출 규약: Windows/Linux/macOS 모두 printf는 C ABI 사용
-        writeln!(out, "    lea rcx, [rel fmt_str]").unwrap();    // format
-        writeln!(out, "    lea rdx, [rel str_{}]", idx).unwrap(); // argument
-        writeln!(out, "    sub rsp, 32").unwrap();                // shadow space (Windows)
-        writeln!(out, "    call printf").unwrap();
-        writeln!(out, "    add rsp, 32").unwrap();
+        // -----------------------------
+        // macOS path
+        // -----------------------------
+        #[cfg(target_os = "macos")]
+        {
+            writeln!(out, "    ; println macOS").unwrap();
+            writeln!(out, "    lea rdi, [rel fmt_str]").unwrap();      // 1st arg (format)
+            writeln!(out, "    lea rsi, [rel str_{}]", idx).unwrap();  // 2nd arg (string)
+            writeln!(out, "    sub rsp, 32").unwrap();                 // shadow space
+            writeln!(out, "    call _printf").unwrap();
+            writeln!(out, "    add rsp, 32").unwrap();
+            return;
+        }
+
+        // -----------------------------
+        // Windows + Linux path
+        // -----------------------------
+        #[cfg(not(target_os = "macos"))]
+        {
+            writeln!(out, "    ; println Windows/Linux").unwrap();
+            writeln!(out, "    lea rcx, [rel fmt_str]").unwrap();      // 1st arg (format)
+            writeln!(out, "    lea rdx, [rel str_{}]", idx).unwrap();  // 2nd arg (string)
+            writeln!(out, "    sub rsp, 32").unwrap();                 // shadow space (Windows ABI-safe)
+            writeln!(out, "    call printf").unwrap();
+            writeln!(out, "    add rsp, 32").unwrap();
+        }
     }
 }
