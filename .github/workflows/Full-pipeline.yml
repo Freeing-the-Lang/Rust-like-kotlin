@@ -1,4 +1,4 @@
-name: "SpongeLang — FULL AUTO 3OS + ASM + META + SHA256 + Windows Fix"
+name: "Rust-like-kotlin — FULL AUTO 3OS + ASM + AUTO-ENTRY + RELEASE"
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: spongelang-${{ github.ref }}
+  group: rlk-kotlin-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -46,9 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ------------------------------------------
-      # Cargo Cache (massive speed-up)
-      # ------------------------------------------
+      # Cargo Cache
       - uses: actions/cache@v4
         with:
           path: |
@@ -57,44 +55,42 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Check input.sp
+      - name: Check input.rlk
         shell: bash
         run: |
-          if [ ! -f input.sp ]; then
-            echo "ERROR: input.sp missing"
+          if [ ! -f input.rlk ]; then
+            echo "ERROR: input.rlk missing"
             exit 1
           fi
 
-      - name: Cargo Build
+      - name: Cargo Build (Rust-like-kotlin Compiler)
         run: cargo build --release --verbose
 
       - name: Prepare build directory
         run: mkdir -p build/meta
 
-      # ------------------------------------------
       # Generate ASM
-      # ------------------------------------------
       - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: ./target/release/rlkc > build/out.asm
+        run: ./target/release/rlkc_kotlin > build/out.asm
 
       - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\target\release\rlkc.exe > build/out.asm
+        run: .\target\release\rlkc_kotlin.exe > build/out.asm
 
+      # Show ASM
       - name: Show ASM
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           echo "=========== ASM =========="
           cat build/out.asm || true
           echo "=========================="
 
-      # ------------------------------------------
-      # Linux Build
-      # ------------------------------------------
+      ###########################################
+      # LINUX BUILD
+      ###########################################
       - name: Build Linux
         if: runner.os == 'Linux'
         shell: bash
@@ -104,9 +100,9 @@ jobs:
           nasm -felf64 build/out.asm -o build/out.o
           ld build/out.o -o build/out
 
-      # ------------------------------------------
-      # macOS Build
-      # ------------------------------------------
+      ###########################################
+      # MACOS BUILD
+      ###########################################
       - name: Build macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -115,15 +111,15 @@ jobs:
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
           ld -macosx_version_min 11.0 \
-            -syslibroot $SDK \
-            -lSystem \
-            -e _main \
-            build/out_x86.o \
-            -o build/out
+             -syslibroot $SDK \
+             -lSystem \
+             -e _main \
+             build/out_x86.o \
+             -o build/out
 
-      # ------------------------------------------
-      # Windows Build — Enhanced
-      # ------------------------------------------
+      ###########################################
+      # WINDOWS BUILD — AUTO ENTRY DETECTION
+      ###########################################
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
@@ -136,34 +132,50 @@ jobs:
 
           nasm -f win64 build/out.asm -o build/out.obj
 
-          # vcvars64.bat 자동 탐색 강화
+          # AUTO-ENTRY DETECTION
+          $asm = Get-Content build/out.asm
+          $candidates = @("main", "_main", "kotlin_main", "start", "_start", "entry", "_entry", "main_func")
+          $entry = $null
+          foreach ($c in $candidates) {
+              if ($asm -match ("^\s*" + [regex]::Escape($c) + ":")) {
+                  $entry = $c
+                  break
+              }
+          }
+          if (-not $entry) {
+              Write-Error "No entry symbol found! Checked: $candidates"
+              exit 1
+          }
+          Write-Host "Detected ENTRY: $entry"
+
+          # Find vcvars64
           $vcPaths = @(
             "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
             "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
             "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
           )
           $vcvars = $vcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $vcvars) { Write-Error "vcvars64.bat not found"; exit 1 }
+          if (-not $vcvars) { Write-Error "vcvars64.bat NOT FOUND"; exit 1 }
 
-          # NASM Win64 엔트리는 main
-          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:main /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
+          # LINK with detected entry
+          cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:$entry /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
 
-      # ------------------------------------------
-      # Upload All ASM (Every OS)
-      # ------------------------------------------
+      ###########################################
+      # Upload ASM (All OS)
+      ###########################################
       - uses: actions/upload-artifact@v4
         with:
           name: asm-${{ matrix.os }}
           path: build/out.asm
 
-      # ------------------------------------------
-      # META JSON
-      # ------------------------------------------
+      ###########################################
+      # META.json
+      ###########################################
       - name: Create META.json
         shell: bash
         run: |
           echo "{
-            \"project\": \"SpongeLang\",
+            \"project\": \"Rust-like-kotlin\",
             \"os\": \"${{ matrix.os }}\",
             \"runner_os\": \"${{ runner.os }}\",
             \"tag\": \"${{ needs.auto-tag.outputs.tag }}\",
@@ -172,14 +184,17 @@ jobs:
             \"hostname\": \"$(hostname)\"
           }" > build/meta/meta.json
 
-      # ------------------------------------------
-      # Upload Final Artifacts
-      # ------------------------------------------
+      ###########################################
+      # Upload Build Artifacts
+      ###########################################
       - uses: actions/upload-artifact@v4
         with:
-          name: spongelang-${{ matrix.os }}
+          name: rlk-kotlin-${{ matrix.os }}
           path: build/*
 
+  ########################################################
+  # RELEASE JOB
+  ########################################################
   release:
     needs: [ auto-tag, build ]
     runs-on: ubuntu-latest
@@ -189,41 +204,39 @@ jobs:
         with:
           path: release-temp
 
-      - name: Organize release structure
+      - name: Organize Release Directories
         run: |
-          mkdir -p release/linux/spongelang-linux \
-                   release/macos/spongelang-macos \
-                   release/windows/spongelang-windows
+          mkdir -p release/linux/rlk-linux \
+                   release/macos/rlk-macos \
+                   release/windows/rlk-windows
 
-          cp -r release-temp/spongelang-ubuntu-latest/* release/linux/spongelang-linux/ || true
-          cp -r release-temp/spongelang-macos-latest/* release/macos/spongelang-macos/ || true
-          cp -r release-temp/spongelang-windows-latest/* release/windows/spongelang-windows/ || true
+          cp -r release-temp/rlk-kotlin-ubuntu-latest/* release/linux/rlk-linux/ || true
+          cp -r release-temp/rlk-kotlin-macos-latest/* release/macos/rlk-macos/ || true
+          cp -r release-temp/rlk-kotlin-windows-latest/* release/windows/rlk-windows/ || true
 
-      - name: Make ZIPs
+      - name: Make ZIPs + SHA256
         run: |
           cd release
-
           zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
           zip -r macos-${{ needs.auto-tag.outputs.tag }}.zip macos
           zip -r windows-${{ needs.auto-tag.outputs.tag }}.zip windows
-
           sha256sum *.zip > checksums.sha256
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
-          name: "SpongeLang 3OS AUTO — ${{ needs.auto-tag.outputs.tag }}"
+          name: "Rust-like-kotlin — 3OS AUTO RELEASE — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            자동 릴리즈 완료
+            Rust-like-kotlin 자동 빌드 + 자동 릴리즈 완료.
 
             - 3OS 빌드
-            - Windows VC 자동탐색 강화
-            - META.json 확장
-            - ASM 3OS 업로드
+            - Windows ENTRY 자동 감지 (main / _main / kotlin_main 등)
+            - META.json 포함
+            - ASM 자동 업로드
             - SHA256 체크섬 포함
 
-            **checksums:**
+            checksums:
             ```
             $(cat release/checksums.sha256)
             ```
