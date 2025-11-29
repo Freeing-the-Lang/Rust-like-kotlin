@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 pub struct Codegen;
 
-// OS별 엔트리 심볼 자동 선택
+// OS별 엔트리 심볼
 #[cfg(target_os = "windows")]
 const ENTRY: &str = "main";
 
@@ -14,15 +14,21 @@ impl Codegen {
     pub fn generate(&self, ir: &IRProgram) -> String {
         let mut out = String::new();
 
-        // global 선언
+        // ENTRY 글로벌 선언
         writeln!(&mut out, "global {}", ENTRY).unwrap();
 
-        // 각 함수 생성
+        // 모든 함수 라벨도 글로벌로 노출
+        for f in &ir.funcs {
+            writeln!(&mut out, "global {}_func", f.name).unwrap();
+            writeln!(&mut out, "global {}_func_end", f.name).unwrap();
+        }
+
+        // 함수 본문 생성
         for f in &ir.funcs {
             self.gen_function(&mut out, f);
         }
 
-        // main 함수가 존재하면 엔트리 생성
+        // ENTRY wrapper 생성
         if ir.funcs.iter().any(|f| f.name == "main") {
             writeln!(&mut out, "{}:", ENTRY).unwrap();
             writeln!(&mut out, "    call main_func").unwrap();
@@ -35,13 +41,16 @@ impl Codegen {
     fn gen_function(&self, out: &mut String, f: &IRFunction) {
         let name = format!("{}_func", f.name);
 
+        // 함수 시작
         writeln!(out, "{}:", name).unwrap();
 
+        // 본문 출력
         for stmt in &f.body {
             self.gen_stmt(out, stmt);
         }
 
-        writeln!(out, "{}_end:", name).unwrap();
+        // 함수 끝
+        writeln!(out, "{}_func_end:", f.name).unwrap();
         writeln!(out, "    ret").unwrap();
     }
 
@@ -102,7 +111,10 @@ impl Codegen {
                     "+" => writeln!(out, "    add rax, rcx").unwrap(),
                     "-" => writeln!(out, "    sub rax, rcx").unwrap(),
                     "*" => writeln!(out, "    imul rax, rcx").unwrap(),
-                    "/" => writeln!(out, "    xor rdx, rdx\n    idiv rcx").unwrap(),
+                    "/" => {
+                        writeln!(out, "    xor rdx, rdx").unwrap();
+                        writeln!(out, "    idiv rcx").unwrap();
+                    }
                     _ => {}
                 };
             }
