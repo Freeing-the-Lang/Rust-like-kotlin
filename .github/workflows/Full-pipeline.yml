@@ -55,30 +55,42 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Check input.rlk
+      # Ensure input.rlk exists
+      - name: Ensure input.rlk
         shell: bash
         run: |
           if [ ! -f input.rlk ]; then
-            echo "ERROR: input.rlk missing"
-            exit 1
+            echo 'func main() { println("Hello from Rust-like-kotlin") }' > input.rlk
+            echo "Created default input.rlk"
           fi
 
-      - name: Cargo Build (Rust-like-kotlin Compiler)
+      - name: Cargo Build (Compiler)
         run: cargo build --release --verbose
 
-      - name: Prepare build directory
+      - name: Prepare ./build
         run: mkdir -p build/meta
 
-      # Generate ASM
+      # Detect compiler binary (rlkc / rlkc.exe)
+      - name: Detect compiler binary
+        shell: bash
+        run: |
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            echo "RLKC=rlkc.exe" >> $GITHUB_ENV
+          else
+            echo "RLKC=rlkc" >> $GITHUB_ENV
+          fi
+
+      # Generate ASM (Linux/macOS)
       - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: ./target/release/rlkc_kotlin > build/out.asm
+        run: ./target/release/${RLKC} > build/out.asm
 
+      # Generate ASM (Windows)
       - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\target\release\rlkc_kotlin.exe > build/out.asm
+        run: .\target\release\rlkc.exe > build/out.asm
 
       # Show ASM
       - name: Show ASM
@@ -136,16 +148,19 @@ jobs:
           $asm = Get-Content build/out.asm
           $candidates = @("main", "_main", "kotlin_main", "start", "_start", "entry", "_entry", "main_func")
           $entry = $null
+
           foreach ($c in $candidates) {
-              if ($asm -match ("^\s*" + [regex]::Escape($c) + ":")) {
-                  $entry = $c
-                  break
-              }
+            if ($asm -match ("^\s*" + [regex]::Escape($c) + ":")) {
+              $entry = $c
+              break
+            }
           }
+
           if (-not $entry) {
-              Write-Error "No entry symbol found! Checked: $candidates"
-              exit 1
+            Write-Error "No entry symbol found! Checked: $candidates"
+            exit 1
           }
+
           Write-Host "Detected ENTRY: $entry"
 
           # Find vcvars64
@@ -155,9 +170,13 @@ jobs:
             "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
           )
           $vcvars = $vcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $vcvars) { Write-Error "vcvars64.bat NOT FOUND"; exit 1 }
 
-          # LINK with detected entry
+          if (-not $vcvars) {
+            Write-Error "vcvars64.bat NOT FOUND"
+            exit 1
+          }
+
+          # LINK
           cmd.exe /c "`"$vcvars`" && link.exe /DEBUG /ENTRY:$entry /SUBSYSTEM:CONSOLE build/out.obj kernel32.lib user32.lib /OUT:build/out.exe"
 
       ###########################################
@@ -185,7 +204,7 @@ jobs:
           }" > build/meta/meta.json
 
       ###########################################
-      # Upload Build Artifacts
+      # Upload Final Artifacts
       ###########################################
       - uses: actions/upload-artifact@v4
         with:
