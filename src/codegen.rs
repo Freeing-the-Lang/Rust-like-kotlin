@@ -14,21 +14,26 @@ impl Codegen {
     pub fn generate(&self, ir: &IRProgram) -> String {
         let mut out = String::new();
 
-        // ENTRY 글로벌 선언
+        // --------------------------------------------------------
+        // ★ Windows/MSVC에서 반드시 필요한 코드 영역 선언
+        // --------------------------------------------------------
+        writeln!(&mut out, "section .text").unwrap();
+
+        // Entry 선언
         writeln!(&mut out, "global {}", ENTRY).unwrap();
 
-        // 모든 함수 라벨도 글로벌로 노출
+        // 각 함수 글로벌 선언
         for f in &ir.funcs {
             writeln!(&mut out, "global {}_func", f.name).unwrap();
             writeln!(&mut out, "global {}_func_end", f.name).unwrap();
         }
 
-        // 함수 본문 생성
+        // 실제 함수 코드 생성
         for f in &ir.funcs {
             self.gen_function(&mut out, f);
         }
 
-        // ENTRY wrapper 생성
+        // ENTRY 래퍼
         if ir.funcs.iter().any(|f| f.name == "main") {
             writeln!(&mut out, "{}:", ENTRY).unwrap();
             writeln!(&mut out, "    call main_func").unwrap();
@@ -39,18 +44,19 @@ impl Codegen {
     }
 
     fn gen_function(&self, out: &mut String, f: &IRFunction) {
-        let name = format!("{}_func", f.name);
+        let func_label = format!("{}_func", f.name);
+        let end_label = format!("{}_func_end", f.name);
 
-        // 함수 시작
-        writeln!(out, "{}:", name).unwrap();
+        // 함수 시작 라벨
+        writeln!(out, "{}:", func_label).unwrap();
 
-        // 본문 출력
+        // 함수 본문
         for stmt in &f.body {
             self.gen_stmt(out, stmt);
         }
 
         // 함수 끝
-        writeln!(out, "{}_func_end:", f.name).unwrap();
+        writeln!(out, "{}:", end_label).unwrap();
         writeln!(out, "    ret").unwrap();
     }
 
@@ -66,12 +72,7 @@ impl Codegen {
                 writeln!(out, "    ; store var {}", name).unwrap();
             }
 
-            IR::LoadVar(name) => {
-                writeln!(out, "    ; load var {}", name).unwrap();
-            }
-
             IR::If(cond, then_body, else_body) => {
-                writeln!(out, "    ; if start").unwrap();
                 self.gen_expr(out, cond);
 
                 writeln!(out, "    cmp rax, 0").unwrap();
