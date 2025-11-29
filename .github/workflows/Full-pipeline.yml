@@ -1,4 +1,4 @@
-name: "Rust-like-kotlin — FULL AUTO 3OS BUILD + PRINTLN + RELEASE"
+name: "Rust-like-kotlin — FULL AUTO 3OS BUILD + PRINTLN + RELEASE (macOS FIX)"
 
 on:
   push:
@@ -39,16 +39,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        os: [ ubuntu-latest, macos-13, windows-latest ]   # ★ macOS ARM64 문제 FIX
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # =====================================================
-      # CHECK INPUT FILE
-      # =====================================================
+      # =========================================
+      # CHECK SOURCE
+      # =========================================
       - name: Check input.rlk
         shell: bash
         run: |
@@ -57,18 +57,18 @@ jobs:
             exit 1
           fi
 
-      # =====================================================
-      # BUILD COMPILER
-      # =====================================================
+      # =========================================
+      # COMPILER BUILD
+      # =========================================
       - name: Cargo Build
         run: cargo build --release --verbose
 
       - name: Prepare build directory
         run: mkdir -p build
 
-      # =====================================================
-      # GENERATE ASM
-      # =====================================================
+      # =========================================
+      # ASM GENERATION
+      # =========================================
       - name: Generate ASM (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -86,9 +86,9 @@ jobs:
           cat build/out.asm || true
           echo "=========================="
 
-      # =====================================================
-      # LINUX BUILD  (IMPORTANT: GCC LINK)
-      # =====================================================
+      # =========================================
+      # LINUX BUILD (printf + CRT)
+      # =========================================
       - name: Build Linux
         if: runner.os == 'Linux'
         shell: bash
@@ -96,11 +96,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nasm gcc
           nasm -felf64 build/out.asm -o build/out.o
-          gcc build/out.o -o build/out     # ★ Linux must use GCC
+          gcc build/out.o -o build/out   # ★ Linux main + printf OK
 
-      # =====================================================
-      # macOS BUILD (uses _printf)
-      # =====================================================
+      # =========================================
+      # macOS BUILD (Intel only, macos-13)
+      # =========================================
       - name: Build macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -114,9 +114,9 @@ jobs:
              build/out_x86.o \
              -o build/out
 
-      # =====================================================
-      # WINDOWS BUILD (MSVC + printf)
-      # =====================================================
+      # =========================================
+      # WINDOWS BUILD (MSVC)
+      # =========================================
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
@@ -135,7 +135,9 @@ jobs:
 
           cmd.exe /c "`"$vcvars`" && link.exe build/out.obj /OUT:build/out.exe /SUBSYSTEM:CONSOLE"
 
-      # Upload platform artifacts
+      # =========================================
+      # UPLOAD PER OS
+      # =========================================
       - uses: actions/upload-artifact@v4
         with:
           name: rust-like-kotlin-${{ matrix.os }}
@@ -144,6 +146,7 @@ jobs:
   release:
     needs: [ auto-tag, build ]
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -153,7 +156,7 @@ jobs:
         run: |
           mkdir -p release/linux release/macos release/windows
           cp -r release-temp/rust-like-kotlin-ubuntu-latest/* release/linux/ || true
-          cp -r release-temp/rust-like-kotlin-macos-latest/* release/macos/ || true
+          cp -r release-temp/rust-like-kotlin-macos-13/* release/macos/ || true
           cp -r release-temp/rust-like-kotlin-windows-latest/* release/windows/ || true
 
       - name: Make ZIPs
@@ -170,10 +173,9 @@ jobs:
           name: "Rust-like-kotlin — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             Rust-like-kotlin 자동 릴리즈 완료
-            - 3OS 빌드
-            - println 지원 (printf 기반)
-            - macOS _printf fix
-            - Windows/MSVC 정상작동
-            - Linux gcc link fix
+            - macOS ARM 빌드 문제 해결 (macos-13)
+            - 3OS printf 지원
+            - ENTRY=main 통일
+            - ASM → 바이너리 → ZIP 자동화
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
