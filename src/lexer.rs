@@ -1,164 +1,131 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    // Keywords
     Func,
     Let,
     Return,
     If,
     Else,
 
-    // Types
     IntType,
     StringType,
 
-    // Identifiers & Literals
     Ident(String),
     Number(i64),
     StringLiteral(String),
 
-    // Symbols
-    LParen,     // (
-    RParen,     // )
-    LBrace,     // {
-    RBrace,     // }
-    Colon,      // :
-    Semicolon,  // ;
-    Comma,      // ,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
+    Semicolon,
+    Assign,
 
-    // Operators
-    Assign,     // =
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-
-    Greater,    // >
-    Less,       // <
-    EqualEqual, // ==
-    NotEqual,   // !=
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Greater,
+    Less,
+    EqualEqual,
+    NotEqual,
 
     EOF,
 }
 
-// ===========================
-// keyword / type lookup table
-// ===========================
-fn lookup_keyword(word: &str) -> Token {
-    match word.to_lowercase().as_str() {
-        "func"   => Token::Func,
-        "let"    => Token::Let,
-        "return" => Token::Return,
-        "if"     => Token::If,
-        "else"   => Token::Else,
-
-        // types
-        "int"    => Token::IntType,
-        "string" => Token::StringType,
-
-        _ => Token::Ident(word.to_string()),
-    }
-}
-
 pub fn lex(input: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
+    use Token::*;
+
     let mut chars = input.chars().peekable();
+    let mut tokens = Vec::new();
 
     while let Some(&c) = chars.peek() {
         match c {
-            // whitespace
-            ' ' | '\n' | '\t' | '\r' => {
-                chars.next();
-            }
+            ' ' | '\t' | '\r' | '\n' => { chars.next(); }
 
-            // punctuation
-            '(' => { chars.next(); tokens.push(Token::LParen); }
-            ')' => { chars.next(); tokens.push(Token::RParen); }
-            '{' => { chars.next(); tokens.push(Token::LBrace); }
-            '}' => { chars.next(); tokens.push(Token::RBrace); }
-            ':' => { chars.next(); tokens.push(Token::Colon); }
-            ';' => { chars.next(); tokens.push(Token::Semicolon); }
-            ',' => { chars.next(); tokens.push(Token::Comma); }
-
-            // operators
-            '+' => { chars.next(); tokens.push(Token::Plus); }
-            '-' => { chars.next(); tokens.push(Token::Minus); }
-            '*' => { chars.next(); tokens.push(Token::Star); }
-            '/' => { chars.next(); tokens.push(Token::Slash); }
-
+            '(' => { chars.next(); tokens.push(LParen); }
+            ')' => { chars.next(); tokens.push(RParen); }
+            '{' => { chars.next(); tokens.push(LBrace); }
+            '}' => { chars.next(); tokens.push(RBrace); }
+            ',' => { chars.next(); tokens.push(Comma); }
+            ':' => { chars.next(); tokens.push(Colon); }
+            ';' => { chars.next(); tokens.push(Semicolon); }
             '=' => {
                 chars.next();
-                if let Some('=') = chars.peek() {
+                if chars.peek() == Some(&'=') {
                     chars.next();
-                    tokens.push(Token::EqualEqual);
+                    tokens.push(EqualEqual);
                 } else {
-                    tokens.push(Token::Assign);
+                    tokens.push(Assign);
                 }
             }
-
+            '+' => { chars.next(); tokens.push(Plus); }
+            '-' => { chars.next(); tokens.push(Minus); }
+            '*' => { chars.next(); tokens.push(Star); }
+            '/' => { chars.next(); tokens.push(Slash); }
+            '>' => { chars.next(); tokens.push(Greater); }
+            '<' => { chars.next(); tokens.push(Less); }
             '!' => {
                 chars.next();
-                if let Some('=') = chars.peek() {
+                if chars.peek() == Some(&'=') {
                     chars.next();
-                    tokens.push(Token::NotEqual);
+                    tokens.push(NotEqual);
+                } else {
+                    panic!("Unexpected '!'");
                 }
             }
 
-            '>' => { chars.next(); tokens.push(Token::Greater); }
-            '<' => { chars.next(); tokens.push(Token::Less); }
-
-            // string literal
             '"' => {
-                chars.next(); // skip "
+                chars.next();
                 let mut s = String::new();
-
-                while let Some(&ch) = chars.peek() {
-                    if ch == '"' {
-                        chars.next();
-                        break;
-                    }
+                while let Some(ch) = chars.next() {
+                    if ch == '"' { break; }
                     s.push(ch);
-                    chars.next();
                 }
-
-                tokens.push(Token::StringLiteral(s));
+                tokens.push(StringLiteral(s));
             }
 
-            // numbers
             d if d.is_ascii_digit() => {
                 let mut num = String::new();
-                while let Some(&n) = chars.peek() {
-                    if n.is_ascii_digit() {
-                        num.push(n);
+                while let Some(&c2) = chars.peek() {
+                    if c2.is_ascii_digit() {
+                        num.push(c2);
                         chars.next();
                     } else {
                         break;
                     }
                 }
-                tokens.push(Token::Number(num.parse().unwrap()));
+                tokens.push(Number(num.parse().unwrap()));
             }
 
-            // identifiers / keywords / types
-            alpha if alpha.is_ascii_alphabetic() => {
-                let mut id = String::new();
-                while let Some(&d) = chars.peek() {
-                    if d.is_ascii_alphanumeric() || d == '_' {
-                        id.push(d);
+            a if a.is_ascii_alphabetic() || a == '_' => {
+                let mut ident = String::new();
+                while let Some(&c2) = chars.peek() {
+                    if c2.is_ascii_alphanumeric() || c2 == '_' {
+                        ident.push(c2);
                         chars.next();
                     } else {
                         break;
                     }
                 }
 
-                tokens.push(lookup_keyword(&id));
+                match ident.as_str() {
+                    "func" => tokens.push(Func),
+                    "let" => tokens.push(Let),
+                    "return" => tokens.push(Return),
+                    "if" => tokens.push(If),
+                    "else" => tokens.push(Else),
+                    "Int" => tokens.push(IntType),
+                    "String" => tokens.push(StringType),
+                    _ => tokens.push(Ident(ident)),
+                }
             }
 
-            // unknown / skip
-            _ => {
-                chars.next();
-            }
+            _ => panic!("Unexpected char: {}", c),
         }
     }
 
-    tokens.push(Token::EOF);
+    tokens.push(EOF);
     tokens
 }
