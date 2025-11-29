@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 pub struct Codegen;
 
-// OS별 엔트리 심볼
+// OS별 ENTRY
 #[cfg(target_os = "windows")]
 const ENTRY: &str = "main";
 
@@ -14,26 +14,42 @@ impl Codegen {
     pub fn generate(&self, ir: &IRProgram) -> String {
         let mut out = String::new();
 
-        // --------------------------------------------------------
-        // ★ Windows/MSVC에서 반드시 필요한 코드 영역 선언
-        // --------------------------------------------------------
+        // ------------------------------------
+        // DATA 영역 (문자열 리터럴 저장)
+        // ------------------------------------
+        writeln!(&mut out, "section .data").unwrap();
+
+        // 문자열 리터럴 테이블
+        let mut str_literals = Vec::new();
+        for func in &ir.funcs {
+            for stmt in &func.body {
+                Self::collect_str(stmt, &mut str_literals);
+            }
+        }
+
+        for (i, s) in str_literals.iter().enumerate() {
+            writeln!(&mut out, "str_{}: db \"{}\", 0", i, s).unwrap();
+            writeln!(&mut out, "str_{}_len: equ $ - str_{}", i, i).unwrap();
+        }
+
+        // ------------------------------------
+        // TEXT 영역
+        // ------------------------------------
         writeln!(&mut out, "section .text").unwrap();
 
-        // Entry 선언
+        // 모든 심볼 export
         writeln!(&mut out, "global {}", ENTRY).unwrap();
-
-        // 각 함수 글로벌 선언
         for f in &ir.funcs {
             writeln!(&mut out, "global {}_func", f.name).unwrap();
             writeln!(&mut out, "global {}_func_end", f.name).unwrap();
         }
 
-        // 실제 함수 코드 생성
+        // 함수 본문 생성
         for f in &ir.funcs {
-            self.gen_function(&mut out, f);
+            self.gen_function(&mut out, f, &str_literals);
         }
 
-        // ENTRY 래퍼
+        // ENTRY wrapper
         if ir.funcs.iter().any(|f| f.name == "main") {
             writeln!(&mut out, "{}:", ENTRY).unwrap();
             writeln!(&mut out, "    call main_func").unwrap();
@@ -43,84 +59,108 @@ impl Codegen {
         out
     }
 
-    fn gen_function(&self, out: &mut String, f: &IRFunction) {
-        let func_label = format!("{}_func", f.name);
-        let end_label = format!("{}_func_end", f.name);
+    // 문자열 리터럴 재귀 수집
+    fn collect_str(stmt: &IR, out: &mut Vec<String>) {
+        match stmt {
+            IR::Println(expr) => {
+                if let IRExpr::Str(s) = expr {
+                    out.push(s.clone());
+                }
+            }
+            _ => {}
+        }
+    }
 
-        // 함수 시작 라벨
-        writeln!(out, "{}:", func_label).unwrap();
+    fn gen_function(&self, out: &mut String, f: &IRFunction, strs: &Vec<String>) {
+        let label = format!("{}_func", f.name);
 
-        // 함수 본문
+        writeln!(out, "{}:", label).unwrap();
+
         for stmt in &f.body {
-            self.gen_stmt(out, stmt);
+            self.gen_stmt(out, stmt, strs);
         }
 
-        // 함수 끝
-        writeln!(out, "{}:", end_label).unwrap();
+        writeln!(out, "{}_func_end:", f.name).unwrap();
         writeln!(out, "    ret").unwrap();
     }
 
-    fn gen_stmt(&self, out: &mut String, stmt: &IR) {
+    fn gen_stmt(&self, out: &mut String, stmt: &IR, strs: &Vec<String>) {
         match stmt {
             IR::Return(expr) => {
-                self.gen_expr(out, expr);
+                self.gen_expr(out, expr, strs);
                 writeln!(out, "    ret").unwrap();
             }
 
-            IR::StoreVar(name, expr) => {
-                self.gen_expr(out, expr);
-                writeln!(out, "    ; store var {}", name).unwrap();
+            IR::StoreVar(_, expr) => {
+                self.gen_expr(out, expr, strs);
             }
 
-            IR::If(cond, then_body, else_body) => {
-                self.gen_expr(out, cond);
-
-                writeln!(out, "    cmp rax, 0").unwrap();
-                writeln!(out, "    je .else_block").unwrap();
-
-                for s in then_body {
-                    self.gen_stmt(out, s);
-                }
-
-                writeln!(out, "    jmp .end_if").unwrap();
-                writeln!(out, ".else_block:").unwrap();
-
-                for s in else_body {
-                    self.gen_stmt(out, s);
-                }
-
-                writeln!(out, ".end_if:").unwrap();
+            IR::Println(expr) => {
+                self.gen_print(out, expr, strs);
             }
 
             _ => {}
         }
     }
 
-    fn gen_expr(&self, out: &mut String, expr: &IRExpr) {
+    fn gen_expr(&self, out: &mut String, expr: &IRExpr, strs: &Vec<String>) {
         match expr {
             IRExpr::Int(n) => {
                 writeln!(out, "    mov rax, {}", n).unwrap();
             }
 
-            IRExpr::Binary(a, op, b) => {
-                self.gen_expr(out, a);
-                writeln!(out, "    push rax").unwrap();
-                self.gen_expr(out, b);
-                writeln!(out, "    pop rcx").unwrap();
-
-                match op.as_str() {
-                    "+" => writeln!(out, "    add rax, rcx").unwrap(),
-                    "-" => writeln!(out, "    sub rax, rcx").unwrap(),
-                    "*" => writeln!(out, "    imul rax, rcx").unwrap(),
-                    "/" => {
-                        writeln!(out, "    xor rdx, rdx").unwrap();
-                        writeln!(out, "    idiv rcx").unwrap();
-                    }
-                    _ => {}
-                };
+            IRExpr::Str(s) => {
+                // 문자열 리터럴 위치 찾기
+                let index = strs.iter().position(|x| x == s).unwrap();
+                writeln!(out, "    lea rax, [rel str_{}]", index).unwrap();
             }
 
             _ => {}
         }
     }
-}
+
+    // --------------------------------------------------------
+    // ★ println 구현 (3 OS 공통)
+    // --------------------------------------------------------
+    fn gen_print(&self, out: &mut String, expr: &IRExpr, strs: &Vec<String>) {
+        // 문자열 주소 가져오기 → RDI (Linux/Mac), RDX (Windows)
+        if let IRExpr::Str(s) = expr {
+            let idx = strs.iter().position(|x| x == s).unwrap();
+
+            // OS 별 출력 방식
+            #[cfg(target_os = "windows")]
+            {
+                writeln!(out, "    ; println (Windows)").unwrap();
+                writeln!(out, "    sub rsp, 32").unwrap();
+                writeln!(out, "    mov rcx, -11").unwrap();        // STD_OUTPUT_HANDLE
+                writeln!(out, "    call GetStdHandle").unwrap();
+                writeln!(out, "    mov rcx, rax").unwrap();        // handle
+                writeln!(out, "    lea rdx, [rel str_{}]", idx).unwrap();
+                writeln!(out, "    mov r8, str_{}_len", idx).unwrap();
+                writeln!(out, "    xor r9d, r9d").unwrap();
+                writeln!(out, "    call WriteConsoleA").unwrap();
+                writeln!(out, "    add rsp, 32").unwrap();
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                writeln!(out, "    ; println (Linux)").unwrap();
+                writeln!(out, "    mov rax, 1").unwrap();                // write
+                writeln!(out, "    mov rdi, 1").unwrap();                // stdout
+                writeln!(out, "    lea rsi, [rel str_{}]", idx).unwrap();
+                writeln!(out, "    mov rdx, str_{}_len", idx).unwrap();
+                writeln!(out, "    syscall").unwrap();
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                writeln!(out, "    ; println (macOS)").unwrap();
+                writeln!(out, "    mov rax, 0x2000004").unwrap();         // write
+                writeln!(out, "    mov rdi, 1").unwrap();                // stdout
+                writeln!(out, "    lea rsi, [rel str_{}]", idx).unwrap();
+                writeln!(out, "    mov rdx, str_{}_len", idx).unwrap();
+                writeln!(out, "    syscall").unwrap();
+            }
+        }
+    }
+            }
