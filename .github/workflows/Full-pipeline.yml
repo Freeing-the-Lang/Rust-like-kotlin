@@ -1,16 +1,16 @@
-name: "Rust-like-kotlin — FULL AUTO 3OS BUILD + PRINTLN + RELEASE (macOS FIX)"
+name: "Rust-like-kotlin — FULL AUTO 3OS BUILD + PRINTLN + ARM macOS PACKAGE"
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: rust-like-kotlin-${{ github.ref }}
   cancel-in-progress: true
-
-permissions:
-  contents: write
 
 jobs:
   auto-tag:
@@ -27,10 +27,10 @@ jobs:
           TAG="v$(date +'%Y.%m.%d-%H%M%S')-${GITHUB_SHA::7}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Push tag
+      - name: Push Tag
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
           git tag ${{ steps.tag-step.outputs.tag }}
           git push origin ${{ steps.tag-step.outputs.tag }}
 
@@ -39,16 +39,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-13, windows-latest ]   # ★ macOS ARM64 문제 FIX
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # =========================================
-      # CHECK SOURCE
-      # =========================================
       - name: Check input.rlk
         shell: bash
         run: |
@@ -57,19 +54,13 @@ jobs:
             exit 1
           fi
 
-      # =========================================
-      # COMPILER BUILD
-      # =========================================
       - name: Cargo Build
         run: cargo build --release --verbose
 
       - name: Prepare build directory
         run: mkdir -p build
 
-      # =========================================
-      # ASM GENERATION
-      # =========================================
-      - name: Generate ASM (Linux/macOS)
+      - name: Generate ASM
         if: runner.os != 'Windows'
         shell: bash
         run: ./target/release/rlkc > build/out.asm
@@ -83,29 +74,41 @@ jobs:
         shell: bash
         run: |
           echo "=========== ASM =========="
-          cat build/out.asm || true
+          cat build/out.asm
           echo "=========================="
 
-      # =========================================
-      # LINUX BUILD (printf + CRT)
-      # =========================================
-      - name: Build Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nasm gcc
-          nasm -felf64 build/out.asm -o build/out.o
-          gcc build/out.o -o build/out   # ★ Linux main + printf OK
-
-      # =========================================
-      # macOS BUILD (Intel only, macos-13)
-      # =========================================
-      - name: Build macOS
+      # =======================================================
+      # macOS ARM → PACKAGE ONLY MODE (no NASM build)
+      # =======================================================
+      - name: Detect macOS architecture
         if: runner.os == 'macOS'
-        shell: bash
+        id: macos-arch
         run: |
-          brew install -q nasm
+          ARCH=$(uname -m)
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+
+      - name: macOS ARM package-only
+        if: runner.os == 'macOS' && steps.macos-arch.outputs.arch == 'arm64'
+        run: |
+          echo "macOS ARM detected → PACKAGE MODE"
+          mkdir -p build/package
+          cp input.rlk build/package/
+          cp build/out.asm build/package/
+          echo "Generated ARM macOS package"
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS' && steps.macos-arch.outputs.arch == 'arm64'
+        with:
+          name: rust-like-kotlin-macos-arm-package
+          path: build/package/*
+
+      # =======================================================
+      # macOS Intel (x86_64 NASM build)
+      # =======================================================
+      - name: Build macOS Intel
+        if: runner.os == 'macOS' && steps.macos-arch.outputs.arch != 'arm64'
+        run: |
+          brew install nasm
           SDK=$(xcrun --show-sdk-path)
           nasm -fmacho64 build/out.asm -o build/out_x86.o
           ld -macos_version_min 11.0 \
@@ -114,9 +117,32 @@ jobs:
              build/out_x86.o \
              -o build/out
 
-      # =========================================
-      # WINDOWS BUILD (MSVC)
-      # =========================================
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS' && steps.macos-arch.outputs.arch != 'arm64'
+        with:
+          name: rust-like-kotlin-macos-intel
+          path: build/*
+
+      # =======================================================
+      # Linux Build
+      # =======================================================
+      - name: Build Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc
+          nasm -felf64 build/out.asm -o build/out.o
+          gcc build/out.o -o build/out
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: rust-like-kotlin-linux
+          path: build/*
+
+      # =======================================================
+      # Windows Build
+      # =======================================================
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
@@ -135,12 +161,10 @@ jobs:
 
           cmd.exe /c "`"$vcvars`" && link.exe build/out.obj /OUT:build/out.exe /SUBSYSTEM:CONSOLE"
 
-      # =========================================
-      # UPLOAD PER OS
-      # =========================================
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
         with:
-          name: rust-like-kotlin-${{ matrix.os }}
+          name: rust-like-kotlin-windows
           path: build/*
 
   release:
@@ -152,19 +176,22 @@ jobs:
         with:
           path: release-temp
 
-      - name: Organize release
+      - name: Organize release artifacts
         run: |
-          mkdir -p release/linux release/macos release/windows
-          cp -r release-temp/rust-like-kotlin-ubuntu-latest/* release/linux/ || true
-          cp -r release-temp/rust-like-kotlin-macos-13/* release/macos/ || true
-          cp -r release-temp/rust-like-kotlin-windows-latest/* release/windows/ || true
+          mkdir -p release/linux release/windows release/macos-intel release/macos-arm
+
+          cp -r release-temp/rust-like-kotlin-linux/* release/linux/ || true
+          cp -r release-temp/rust-like-kotlin-windows/* release/windows/ || true
+          cp -r release-temp/rust-like-kotlin-macos-intel/* release/macos-intel/ || true
+          cp -r release-temp/rust-like-kotlin-macos-arm-package/* release/macos-arm/ || true
 
       - name: Make ZIPs
         run: |
           cd release
-          zip -r linux-${{ needs.auto-tag.outputs.tag }}.zip linux
-          zip -r macos-${{ needs.auto-tag.outputs.tag }}.zip macos
-          zip -r windows-${{ needs.auto-tag.outputs.tag }}.zip windows
+          zip -r linux.zip linux
+          zip -r windows.zip windows
+          zip -r macos-intel.zip macos-intel
+          zip -r macos-arm-package.zip macos-arm
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -173,9 +200,9 @@ jobs:
           name: "Rust-like-kotlin — ${{ needs.auto-tag.outputs.tag }}"
           body: |
             Rust-like-kotlin 자동 릴리즈 완료
-            - macOS ARM 빌드 문제 해결 (macos-13)
-            - 3OS printf 지원
-            - ENTRY=main 통일
-            - ASM → 바이너리 → ZIP 자동화
+            - Linux: 실행파일 포함
+            - Windows: 실행파일 포함
+            - macOS(Intel): 실행파일 포함
+            - macOS(ARM): NASM 불가 → PACKAGE MODE 제공 (ASM + input.rlk)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
