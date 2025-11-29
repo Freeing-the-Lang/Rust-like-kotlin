@@ -11,7 +11,7 @@ use codegen::Codegen;
 use std::fs;
 
 fn main() {
-    let input = fs::read_to_string("input.sp")
+    let input = fs::read_to_string("input.rlk")
         .expect("Failed to read input.sp");
 
     let tokens = lex(&input);
