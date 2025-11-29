@@ -1,5 +1,13 @@
 use crate::parser::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+//
+// Built-in functions (semantic only, no user definition needed)
+//
+const BUILTIN_FUNCS: &[&str] = &[
+    "println",
+    "print",
+];
 
 #[derive(Debug, Clone)]
 pub enum IR {
@@ -35,12 +43,18 @@ pub struct IRProgram {
     pub funcs: Vec<IRFunction>,
 }
 
+//
+// Semantic Analyzer
+//
 pub struct SemanticAnalyzer {
-    // 함수 목록을 HashMap이 아닌 **Vec** 으로 유지 — 순서 안정적
+    // 전체 Function 리스트 (순서를 유지)
     functions: Vec<Function>,
 
-    // 이름 기반 참조용 (타입 체크, 존재 여부 검사)
+    // 이름 → Function
     map: HashMap<String, Function>,
+
+    // built-in 함수 집합
+    builtins: HashSet<String>,
 }
 
 impl SemanticAnalyzer {
@@ -50,17 +64,21 @@ impl SemanticAnalyzer {
             map.insert(f.name.clone(), f.clone());
         }
 
-        // *** 여기! HashMap 아니라 Vec 으로 보관 ***
+        let mut builtins = HashSet::new();
+        for b in BUILTIN_FUNCS {
+            builtins.insert((*b).to_string());
+        }
+
         Self {
-            functions: program.funcs, // 순서 그대로 유지
+            functions: program.funcs,
             map,
+            builtins,
         }
     }
 
     pub fn analyze(&self) -> IRProgram {
         let mut funcs = Vec::new();
 
-        // *** 여기! 순서 안정적, main 절대 사라지지 않음 ***
         for f in &self.functions {
             funcs.push(self.analyze_function(f));
         }
@@ -71,6 +89,7 @@ impl SemanticAnalyzer {
     fn analyze_function(&self, f: &Function) -> IRFunction {
         let mut scope: HashMap<String, TypeName> = HashMap::new();
 
+        // 파라미터 → 스코프 등록
         for (pname, ptype) in &f.params {
             scope.insert(pname.clone(), ptype.clone());
         }
@@ -98,6 +117,9 @@ impl SemanticAnalyzer {
     ) -> Vec<IR> {
 
         match stmt {
+            //
+            // let name: Type = expr;
+            //
             Stmt::Let(name, t, expr) => {
                 let et = self.expr_type(expr, scope);
 
@@ -114,6 +136,9 @@ impl SemanticAnalyzer {
                 vec![IR::StoreVar(name.clone(), e)]
             }
 
+            //
+            // return expr;
+            //
             Stmt::Return(expr) => {
                 let et = self.expr_type(expr, scope);
                 if &et != expected_ret {
@@ -127,11 +152,19 @@ impl SemanticAnalyzer {
                 vec![IR::Return(e)]
             }
 
+            //
+            // expr;
+            //
             Stmt::ExprStmt(expr) => {
                 let e = self.analyze_expr(expr, scope);
+
+                // 임시 값 저장 (필요없지만 일관성을 위해 IR 생성)
                 vec![IR::StoreVar("_expr_tmp".to_string(), e)]
             }
 
+            //
+            // if cond { then } else { else }
+            //
             Stmt::If(cond, then_body, else_body) => {
                 let ct = self.expr_type(cond, scope);
                 if ct != TypeName::Int {
@@ -160,7 +193,9 @@ impl SemanticAnalyzer {
     fn analyze_expr(&self, expr: &Expr, scope: &HashMap<String, TypeName>) -> IRExpr {
         match expr {
             Expr::Number(n) => IRExpr::Int(*n),
+
             Expr::StringLiteral(s) => IRExpr::Str(s.clone()),
+
             Expr::Var(name) => IRExpr::Var(name.clone()),
 
             Expr::Binary(a, op, b) => {
@@ -170,6 +205,20 @@ impl SemanticAnalyzer {
             }
 
             Expr::Call(name, args) => {
+                //
+                // Built-in: 그냥 바로 허용
+                //
+                if self.builtins.contains(name) {
+                    let ir_args = args
+                        .iter()
+                        .map(|a| self.analyze_expr(a, scope))
+                        .collect();
+                    return IRExpr::Call(name.clone(), ir_args);
+                }
+
+                //
+                // 사용자 정의 함수
+                //
                 if !self.map.contains_key(name) {
                     panic!("Unknown function '{}'", name);
                 }
@@ -196,20 +245,19 @@ impl SemanticAnalyzer {
                     }
                 }
 
-                let ir_args = args
-                    .iter()
-                    .map(|a| self.analyze_expr(a, scope))
-                    .collect();
-
+                let ir_args = args.iter().map(|a| self.analyze_expr(a, scope)).collect();
                 IRExpr::Call(name.clone(), ir_args)
             }
         }
     }
 
+    //
+    // 타입 계산
+    //
     fn expr_type(&self, expr: &Expr, scope: &HashMap<String, TypeName>) -> TypeName {
         match expr {
-
             Expr::Number(_) => TypeName::Int,
+
             Expr::StringLiteral(_) => TypeName::String,
 
             Expr::Var(name) => scope
@@ -221,10 +269,12 @@ impl SemanticAnalyzer {
                 let lt = self.expr_type(a, scope);
                 let rt = self.expr_type(b, scope);
 
+                // String + String → String
                 if op == "+" && lt == TypeName::String && rt == TypeName::String {
                     return TypeName::String;
                 }
 
+                // 나머지는 전부 Int 연산
                 if lt != TypeName::Int || rt != TypeName::Int {
                     panic!("Operator '{}' requires int operands", op);
                 }
@@ -233,6 +283,12 @@ impl SemanticAnalyzer {
             }
 
             Expr::Call(name, _) => {
+                // built-in 함수는 타입이 없다 → print, println 은 아무거나 가능하게 하거나 Int 반환으로 고정 가능
+                if self.builtins.contains(name) {
+                    // println → Int 반환하도록 유지 (가장 편함)
+                    return TypeName::Int;
+                }
+
                 let func = self
                     .map
                     .get(name)
