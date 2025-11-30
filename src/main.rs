@@ -4,6 +4,7 @@ mod semantic;
 mod codegen;
 
 use std::fs;
+use std::env;
 
 fn main() {
     let source = fs::read_to_string("input.rlk")
@@ -16,8 +17,14 @@ fn main() {
     let semantic = semantic::SemanticAnalyzer::new(ast);
     let ir = semantic.analyze();
 
-    let codegen = codegen::Codegen;
-    let asm = codegen.generate(&ir);
+    // detect system architecture
+    let arch = env::consts::ARCH;   // "x86_64" or "aarch64"
+
+    let asm = if arch == "aarch64" {
+        codegen::generate_arm64(&ir)
+    } else {
+        codegen::generate_x86_64(&ir)
+    };
 
     println!("{}", asm);
 }
