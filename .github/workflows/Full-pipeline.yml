@@ -1,4 +1,4 @@
-name: "Rust-like-kotlin — FULL AUTO 4OS BUILD (Intel + ARM64)"
+name: "Rust-like-kotlin — FULL AUTO 4OS BUILD (Intel + ARM64 ASM Backend)"
 
 on:
   push:
@@ -34,23 +34,25 @@ jobs:
           git tag ${{ steps.tag-step.outputs.tag }}
           git push origin ${{ steps.tag-step.outputs.tag }}
 
+
   build:
     needs: auto-tag
+
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - ubuntu-24.04-arm64
-          - macos-latest
-          - windows-latest
+          - ubuntu-latest            # x86_64 Linux
+          - ubuntu-24.04-arm64       # ARM64 Linux
+          - macos-latest             # intel or arm auto-detect
+          - windows-latest           # Windows x86_64
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify input.rlk exists
+      - name: Verify input.rlk
         shell: bash
         run: |
           if [ ! -f input.rlk ]; then
@@ -64,46 +66,58 @@ jobs:
       - name: Prepare build directory
         run: mkdir -p build
 
+
+      # =========================================================
+      # Generate ASM via rlkc (now arch-aware)
+      # rlkc should output:
+      #   x86_64 → build/out.asm
+      #   arm64  → build/out_arm64.s
+      # =========================================================
       - name: Generate ASM (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: ./target/release/rlkc > build/out.asm
+        run: ./target/release/rlkc
 
       - name: Generate ASM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\target\release\rlkc.exe > build/out.asm
+        run: .\target\release\rlkc.exe
 
-      - name: Show ASM
+
+      - name: Show ASM files
         shell: bash
         run: |
-          echo "=========== ASM =========="
-          cat build/out.asm
-          echo "=========================="
+          echo "======== ASM files in build/ ========"
+          ls -al build/
+          echo "====================================="
 
-      # =======================================================
-      # macOS (Intel & ARM64)
-      # =======================================================
-      - name: Detect macOS architecture
+      # =========================================================
+      # macOS ARCH DETECT
+      # =========================================================
+      - name: Detect macOS arch
         if: runner.os == 'macOS'
         id: macos-arch
         run: |
           echo "arch=$(uname -m)" >> $GITHUB_OUTPUT
 
-      # ---------- macOS ARM64 (ARM native build via clang)
+
+      # =========================================================
+      # macOS ARM64 (ARM64 ASM → clang → ld)
+      # =========================================================
       - name: Build macOS ARM64
         if: runner.os == 'macOS' && steps.macos-arch.outputs.arch == 'arm64'
         run: |
-          echo "Detected macOS ARM64 → Using clang assembler"
+          echo "Detected macOS ARM64 → ARM64 ASM backend"
           SDK=$(xcrun --show-sdk-path)
-          clang -arch arm64 -c build/out.asm -o build/out_arm64.o
+          clang -arch arm64 -c build/out_arm64.s -o build/out_arm64.o
           ld -arch arm64 \
              -syslibroot $SDK \
              -lSystem \
              -e _main \
              build/out_arm64.o \
              -o build/out
-          echo "ARM64 macOS build complete"
+          echo "ARM64 macOS binary built"
+
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS' && steps.macos-arch.outputs.arch == 'arm64'
@@ -111,7 +125,10 @@ jobs:
           name: rust-like-kotlin-macos-arm64
           path: build/*
 
-      # ---------- macOS Intel x86_64 (NASM)
+
+      # =========================================================
+      # macOS Intel (x86_64 NASM)
+      # =========================================================
       - name: Build macOS Intel
         if: runner.os == 'macOS' && steps.macos-arch.outputs.arch != 'arm64'
         run: |
@@ -124,7 +141,8 @@ jobs:
              -e _main \
              build/out_x86.o \
              -o build/out
-          echo "macOS Intel build complete"
+          echo "macOS Intel binary built"
+
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS' && steps.macos-arch.outputs.arch != 'arm64'
@@ -132,9 +150,10 @@ jobs:
           name: rust-like-kotlin-macos-intel
           path: build/*
 
-      # =======================================================
-      # Linux x86_64
-      # =======================================================
+
+      # =========================================================
+      # Linux x86_64 (NASM → GCC)
+      # =========================================================
       - name: Build Linux x86_64
         if: runner.os == 'Linux' && matrix.os != 'ubuntu-24.04-arm64'
         run: |
@@ -142,7 +161,7 @@ jobs:
           sudo apt-get install -y nasm gcc
           nasm -felf64 build/out.asm -o build/out.o
           gcc -no-pie build/out.o -o build/out
-          echo "Linux x86_64 build complete"
+          echo "Linux x86_64 binary built"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux' && matrix.os != 'ubuntu-24.04-arm64'
@@ -150,17 +169,18 @@ jobs:
           name: rust-like-kotlin-linux-x86_64
           path: build/*
 
-      # =======================================================
-      # Linux ARM64
-      # =======================================================
+
+      # =========================================================
+      # Linux ARM64 (ARM64 ASM → clang → gcc-aarch64)
+      # =========================================================
       - name: Build Linux ARM64
         if: runner.os == 'Linux' && matrix.os == 'ubuntu-24.04-arm64'
         run: |
           sudo apt-get update
           sudo apt-get install -y clang gcc-aarch64-linux-gnu
-          clang -target aarch64-linux-gnu -c build/out.asm -o build/out.o
-          aarch64-linux-gnu-gcc build/out.o -o build/out
-          echo "Linux ARM64 build complete"
+          clang -target aarch64-linux-gnu -c build/out_arm64.s -o build/out_arm64.o
+          aarch64-linux-gnu-gcc build/out_arm64.o -o build/out
+          echo "Linux ARM64 binary built"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux' && matrix.os == 'ubuntu-24.04-arm64'
@@ -168,9 +188,10 @@ jobs:
           name: rust-like-kotlin-linux-arm64
           path: build/*
 
-      # =======================================================
-      # Windows Build
-      # =======================================================
+
+      # =========================================================
+      # Windows (NASM + link.exe)
+      # =========================================================
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm -y
@@ -188,13 +209,14 @@ jobs:
           }
 
           cmd.exe /c "`"$vcvars`" && link.exe build/out.obj /defaultlib:kernel32.lib /defaultlib:user32.lib /OUT:build/out.exe /SUBSYSTEM:CONSOLE"
-          echo "Windows build complete"
+          echo "Windows binary built"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: rust-like-kotlin-windows
           path: build/*
+
 
   release:
     needs: [ auto-tag, build ]
@@ -205,24 +227,23 @@ jobs:
         with:
           path: release-temp
 
-      - name: Organize release artifacts
+      - name: Organize into folders
         run: |
-          mkdir -p release/linux-x86_64 release/linux-arm64 release/windows release/macos-intel release/macos-arm64
-
+          mkdir -p release/linux-x86_64 release/linux-arm64 release/macos-intel release/macos-arm64 release/windows
           cp -r release-temp/rust-like-kotlin-linux-x86_64/* release/linux-x86_64/ || true
           cp -r release-temp/rust-like-kotlin-linux-arm64/* release/linux-arm64/ || true
-          cp -r release-temp/rust-like-kotlin-windows/* release/windows/ || true
           cp -r release-temp/rust-like-kotlin-macos-intel/* release/macos-intel/ || true
           cp -r release-temp/rust-like-kotlin-macos-arm64/* release/macos-arm64/ || true
+          cp -r release-temp/rust-like-kotlin-windows/* release/windows/ || true
 
-      - name: Make ZIPs
+      - name: ZIP all platforms
         run: |
           cd release
           zip -r linux-x86_64.zip linux-x86_64
           zip -r linux-arm64.zip linux-arm64
-          zip -r windows.zip windows
           zip -r macos-intel.zip macos-intel
           zip -r macos-arm64.zip macos-arm64
+          zip -r windows.zip windows
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -230,11 +251,11 @@ jobs:
           tag_name: ${{ needs.auto-tag.outputs.tag }}
           name: "Rust-like-kotlin — ${{ needs.auto-tag.outputs.tag }}"
           body: |
-            Rust-like-kotlin FULL AUTO 4OS RELEASE
-            - Linux x86_64: 실행파일 포함
-            - Linux ARM64: 실행파일 포함
-            - macOS Intel: 실행파일 포함
-            - macOS ARM64: 실행파일 포함 (clang ARM 빌드)
-            - Windows x64: 실행파일 포함
+            FULL AUTO MULTI-ARCH RELEASE
+            - Linux x86_64: 실행 가능
+            - Linux ARM64: 실행 가능 (ARM ASM backend)
+            - macOS Intel: 실행 가능
+            - macOS ARM64: 실행 가능 (ARM ASM backend)
+            - Windows x64: 실행 가능
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
