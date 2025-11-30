@@ -244,4 +244,4 @@ impl Codegen {
         // printf
         out.push_str("    bl _printf\n");
     }
-    }
+}
